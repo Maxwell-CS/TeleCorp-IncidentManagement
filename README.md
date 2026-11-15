@@ -38,17 +38,39 @@ Documento pilar: [`docs/AZURE.md`](docs/AZURE.md). Contratos compartidos con AWS
 | Consola | `GET /api/incidents`, `GET/PATCH /api/incidents/{id}`, `PATCH /api/reports/{id}` | `x-operator-token` | Gestión |
 | Consola | `GET /api/antennas`, `GET /api/predictions`, `GET /api/infra/events`, `GET /api/settings`, `POST /api/ops/redrive` | `x-operator-token` | Operación |
 
-### Envía (URLs en `.env`)
-| Destino | Llamada | Contenido | Si falla |
-|---|---|---|---|
-| **GCP** | `POST {GCP_API_BASE}/ai/classify-report` | Texto del reporte sin datos personales | Reglas |
-| **GCP** | `POST {GCP_API_BASE}/ai/summarize-incident` | Datos de la incidencia | Reglas |
-| **GCP** | `POST {GCP_API_BASE}/ingest/incidents` | `incident.upsert` y `report.upsert` | Reintento y DLQ |
-| **AWS** | `GET {AWS_API_BASE}/config` | Configuración global | Caché / valores por defecto |
-| **AWS** | `GET {AWS_API_BASE}/antennas`, `/predictions` | Para la consola | Proyección local |
-| Usuarios | ACS Email / SMS | 3 etapas | Reintento y DLQ |
+### Consume (endpoints de otras nubes que Azure llama; URLs en `.env`)
+| Nube | Endpoint que Azure consume | Header | Para qué | Si falla |
+|---|---|---|---|---|
+| **GCP** | `POST {GCP_API_BASE}/ai/classify-report` | `x-api-key` | **Obtener la clasificación con IA de cada reporte** (categoría, urgencia, sitio crítico) | Clasificación por reglas |
+| **GCP** | `POST {GCP_API_BASE}/ai/summarize-incident` | `x-api-key` | Resumen, causa probable y acción recomendada de cada incidencia | Resumen por reglas |
+| **GCP** | `POST {GCP_API_BASE}/ingest/incidents` | `x-api-key` + `Idempotency-Key` | Enviar `incident.upsert` y `report.upsert` (sin datos personales) | Reintento y DLQ |
+| **AWS** | `GET {AWS_API_BASE}/config` | `X-API-Key` | Configuración global | Caché / valores por defecto |
+| **AWS** | `GET {AWS_API_BASE}/antennas`, `/predictions` | `X-API-Key` | Estado de antenas y riesgos para la consola | Proyección local |
+| Usuarios | ACS Email / SMS | — | Avisos en 3 etapas | Reintento y DLQ |
 
-Todas las llamadas entre nubes usan `X-API-Key`, el sobre común de `contracts/events/envelope.schema.json` donde aplica, entrega al menos una vez y receptores idempotentes. Detalle en [`docs/AZURE.md`](docs/AZURE.md) §3 y §4.
+Entrega al menos una vez y receptores idempotentes. Detalle en [`docs/AZURE.md`](docs/AZURE.md) §3 y §4; contrato exacto con GCP en [`docs/global/GCP.md`](docs/global/GCP.md) §4.2.
+
+### Clasificación con IA (GCP `/ai/classify-report`)
+Azure **requiere este endpoint de GCP** para clasificar cada reporte (RF-AZ-30 / RF-GCP-23, decisión D1 del equipo).
+
+- **Cuándo:** una vez por reporte, justo después de guardarlo (change feed de Cosmos), antes de contar usuarios para la incidencia. El usuario ya recibió su `202`: nunca espera a la IA.
+- **Código:** `backend/pulsored/services/ai.py` (`classify_report`), llamado desde `services/correlator.py` (`classify`). Tiempo de espera: 4 s (`AI_CLASSIFY_TIMEOUT_S`).
+- **Uso del resultado:** se guarda en el reporte; si hay sitio crítico sube la prioridad de la incidencia (+0.2 en el factor de zona); se muestra en la consola; se devuelve a GCP en `report.upsert` (`ai_category`, `ai_urgency`, `classification_source`).
+
+```json
+// Azure -> GCP   POST {GCP_API_BASE}/ai/classify-report   (header x-api-key)   — sin documento, celular ni correo
+{ "report_id": "REP-LIM-SURCO-ABCDEFGH12345678", "text": "Desde ayer no tengo internet, soy del colegio San Juan",
+  "declared_category": "SIN_INTERNET", "zone_type": "EDUCATIVA" }
+
+// GCP -> Azure   200
+{ "report_id": "REP-LIM-SURCO-ABCDEFGH12345678", "category": "SIN_INTERNET", "urgency": "ALTA",
+  "critical_site": { "mentioned": true, "kind": "COLEGIO" },
+  "confidence": 0.91, "model_version": "gemini-<modelo>", "source": "gemini" }
+
+// GCP no disponible   503 {"error": "ai_unavailable"}  (o más de 4 s)  -> Azure clasifica por reglas, source = "reglas"
+```
+
+`/ai/summarize-incident` funciona igual (timeout 8 s): Azure envía zona, usuarios afectados, evidencia de antenas y hasta 10 descripciones; GCP responde `summary`, `probable_cause`, `recommended_action` y `model_version`.
 
 ## Variables globales (`.env`)
 
