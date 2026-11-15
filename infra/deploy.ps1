@@ -3,6 +3,8 @@
   Idempotente: se puede volver a ejecutar. Región por defecto: westus2 (la suscripción solo permite
   westus2, canadacentral, brazilsouth, chilecentral, westus).
   Salidas (con secretos, NO versionar): infra\outputs.local.json
+  Variables globales (URLs y claves de AWS/GCP, reglas): archivo .env en la raíz (plantilla: .env.example).
+  Cuando AWS/GCP estén listos: edita .env y ejecuta   .\infra\deploy.ps1 -SettingsOnly
 #>
 param(
   [string]$Region = 'westus2',
@@ -10,7 +12,8 @@ param(
   [string]$Suffix = '',
   [switch]$NoKeyVaultRefs,      # si las referencias a Key Vault fallan: guarda los secretos directo en app settings
   [switch]$SkipFrontend,
-  [switch]$SkipBackend
+  [switch]$SkipBackend,
+  [switch]$SettingsOnly         # solo vuelve a subir las variables del .env (URLs/claves de AWS y GCP, reglas)
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -30,6 +33,43 @@ function AzTry { # true si el comando terminó bien (sirve para "¿existe?" y "i
   & az.cmd @args 2>&1 | Out-Null
   $code = $LASTEXITCODE; $ErrorActionPreference = $prev
   return ($code -eq 0)
+}
+
+# ---------- variables globales (.env) ----------
+function Read-DotEnv($path) {
+  $h = [ordered]@{}
+  if (Test-Path $path) {
+    foreach ($line in Get-Content $path -Encoding utf8) {
+      $t = $line.Trim()
+      if (-not $t -or $t.StartsWith('#') -or -not $t.Contains('=')) { continue }
+      $k, $v = $t.Split('=', 2); $h[$k.Trim()] = $v.Trim().Trim('"').Trim("'")
+    }
+  } else { Write-Host "No existe .env: se usan valores por defecto (copia .env.example a .env)" -ForegroundColor Yellow }
+  return $h
+}
+$dotenv = Read-DotEnv (Join-Path $root '.env')
+$secretVars = @{ AWS_API_KEY = 'aws-api-key'; GCP_API_KEY = 'gcp-api-key'; AZURE_INBOUND_API_KEY = 'azure-inbound-api-key' }
+$azureManaged = @('COSMOS','SB','OPERATOR_TOKEN','ACS_CONNECTION_STRING','ACS_SENDER','COSMOS_DB')
+
+function Setting($secretName, $value) {
+  if ($NoKeyVaultRefs) { return $value }
+  return "@Microsoft.KeyVault(SecretUri=https://$($n.kv).vault.azure.net/secrets/$secretName/)"
+}
+function External-Settings {
+  # Variables del .env (URLs de AWS/GCP y reglas). Las claves van a Key Vault y la app las lee por referencia.
+  if (-not $dotenv['AZURE_INBOUND_API_KEY']) { $dotenv['AZURE_INBOUND_API_KEY'] = $out.azureInboundApiKey }
+  $list = @()
+  foreach ($k in $dotenv.Keys) {
+    if ($azureManaged -contains $k) { continue }
+    $v = $dotenv[$k]
+    if ($secretVars.ContainsKey($k)) {
+      if (-not $v) { continue }
+      Az keyvault secret set --vault-name $n.kv -n $secretVars[$k] --value $v -o none
+      $list += "$k=$(Setting $secretVars[$k] $v)"
+    } elseif ($v -ne '') { $list += "$k=$v" }
+    else { $list += "$k=" }   # vacío = modo simulado
+  }
+  return $list
 }
 
 # ---------- sufijo único (se conserva entre ejecuciones) ----------
@@ -52,17 +92,34 @@ Write-Host "Suscripción: $($acct.name)  Región: $Region  Sufijo: $Suffix"
 Az config set extension.use_dynamic_install=yes_without_prompt extension.dynamic_install_allow_preview=true | Out-Null
 foreach ($p in 'Microsoft.DocumentDB','Microsoft.Web','Microsoft.ServiceBus','Microsoft.KeyVault','Microsoft.Communication','Microsoft.Insights','Microsoft.OperationalInsights','Microsoft.Storage') { Az provider register --namespace $p | Out-Null }
 
+if ($SettingsOnly) {
+  Step "Solo variables del .env -> app settings"
+  if (-not $out.azureInboundApiKey) { throw 'No hay despliegue previo (infra\outputs.local.json). Ejecuta primero .\infra\deploy.ps1' }
+  $ext = External-Settings
+  Az functionapp config appsettings set -n $n.func -g $RG --settings @ext -o none
+  Write-Host "Listo: $($ext.Count) variables actualizadas en $($n.func)." -ForegroundColor Green
+  exit 0
+}
+
 Step "1. Grupo de recursos"
 Az group create -n $RG -l $Region -o none
 
 Step "2. Cosmos DB (free tier; si no, serverless)"
 if (-not (AzTry cosmosdb show -n $n.cosmos -g $RG -o none)) {
+  # Respaldo continuo de 7 días (gratis) para restaurar reportes e incidencias (RF-AZ-28); si no se permite, periódico.
   $created = AzTry cosmosdb create -n $n.cosmos -g $RG --locations "regionName=$Region" failoverPriority=0 isZoneRedundant=False `
-    --default-consistency-level Session --enable-free-tier true -o none
+    --default-consistency-level Session --enable-free-tier true --backup-policy-type Continuous --continuous-tier Continuous7Days -o none
+  if (-not $created) {
+    $created = AzTry cosmosdb create -n $n.cosmos -g $RG --locations "regionName=$Region" failoverPriority=0 isZoneRedundant=False `
+      --default-consistency-level Session --enable-free-tier true -o none
+  }
   if (-not $created -and -not (AzTry cosmosdb show -n $n.cosmos -g $RG -o none)) {
     Write-Host "Free tier no disponible -> serverless" -ForegroundColor Yellow
-    Az cosmosdb create -n $n.cosmos -g $RG --locations "regionName=$Region" failoverPriority=0 isZoneRedundant=False `
-      --default-consistency-level Session --capabilities EnableServerless -o none
+    if (-not (AzTry cosmosdb create -n $n.cosmos -g $RG --locations "regionName=$Region" failoverPriority=0 isZoneRedundant=False `
+      --default-consistency-level Session --capabilities EnableServerless --backup-policy-type Continuous --continuous-tier Continuous7Days -o none)) {
+      Az cosmosdb create -n $n.cosmos -g $RG --locations "regionName=$Region" failoverPriority=0 isZoneRedundant=False `
+        --default-consistency-level Session --capabilities EnableServerless -o none
+    }
     $out.cosmosMode = 'serverless'
   } else { $out.cosmosMode = 'free-tier' }
 }
@@ -116,14 +173,12 @@ $me = (Az ad signed-in-user show --query id -o tsv).Trim()
 [void](AzTry role assignment create --assignee-object-id $me --assignee-principal-type User --role 'Key Vault Secrets Officer' --scope $kvId -o none)
 [void](AzTry role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope $kvId -o none)
 Start-Sleep 30   # propagación de RBAC
+if (-not $out.azureInboundApiKey) {
+  $out.azureInboundApiKey = if ($dotenv['AZURE_INBOUND_API_KEY']) { $dotenv['AZURE_INBOUND_API_KEY'] } else { -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ }) }
+}
 if (-not $out.operatorToken) { $out.operatorToken = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ }) }
 $secrets = @{ 'cosmos-connection' = $cosmosConn; 'servicebus-connection' = $sbConn; 'operator-token' = $out.operatorToken }
 foreach ($k in $secrets.Keys) { Az keyvault secret set --vault-name $n.kv -n $k --value $secrets[$k] -o none }
-
-function Setting($secretName, $value) {
-  if ($NoKeyVaultRefs) { return $value }
-  return "@Microsoft.KeyVault(SecretUri=https://$($n.kv).vault.azure.net/secrets/$secretName/)"
-}
 
 Step "7. Communication Services + Email (si falla, queda email simulado)"
 $acsConn = ''; $acsSender = ''
@@ -147,9 +202,9 @@ try {
 Step "8. App settings de la Function App"
 $settings = @(
   "COSMOS=$(Setting 'cosmos-connection' $cosmosConn)", "SB=$(Setting 'servicebus-connection' $sbConn)",
-  "OPERATOR_TOKEN=$(Setting 'operator-token' $out.operatorToken)", "COSMOS_DB=pulsored",
-  "USERS_THRESHOLD=10", "OPERATOR_WAIT_MIN=120", "RECOVERY_POLL_MIN=5", "COOLDOWN_MIN=30"
+  "OPERATOR_TOKEN=$(Setting 'operator-token' $out.operatorToken)", "COSMOS_DB=pulsored"
 )
+$settings += External-Settings
 if ($acsConn) { $settings += "ACS_CONNECTION_STRING=$(Setting 'acs-connection' $acsConn)"; $settings += "ACS_SENDER=$acsSender" }
 Az functionapp config appsettings set -n $n.func -g $RG --settings @settings -o none
 
@@ -181,16 +236,16 @@ if (-not $SkipFrontend) {
   [void](AzTry functionapp cors add -n $n.func -g $RG --allowed-origins "https://$swaHost" -o none)
 }
 
-Step "11. Llave de función (para AWS) y salidas"
-$fkey = (Az functionapp keys list -n $n.func -g $RG --query functionKeys.default -o tsv).Trim()
+Step "11. Salidas"
 $out.resourceGroup = $RG; $out.region = $Region; $out.suffix = $Suffix; $out.names = $n
 $out.apiBase = "https://$funcHost"; $out.siteUrl = if ($swaHost) { "https://$swaHost" } else { '' }
-$out.infraEventsUrl = "https://$funcHost/api/infra/events"; $out.functionKey = $fkey
+$out.infraEventsUrl = "https://$funcHost/api/events/infra"; $out.azureBaseUrl = "https://$funcHost/api"
 $out.acsSender = $acsSender
 ($out | ConvertTo-Json -Depth 5) | Set-Content $outFile -Encoding utf8
 
 Write-Host "`nLISTO." -ForegroundColor Green
 Write-Host "API:        https://$funcHost/api/health"
 Write-Host "Sitio:      $($out.siteUrl)"
-Write-Host "Eventos AWS: $($out.infraEventsUrl)   (llave en infra\outputs.local.json -> functionKey)"
+Write-Host "Eventos AWS: $($out.infraEventsUrl)   (X-API-Key en infra\outputs.local.json -> azureInboundApiKey)"
+Write-Host "Para P1 (AWS): SSM /pulsored/endpoints/azure = $($out.azureBaseUrl)  y  outbound.azure_api_key = azureInboundApiKey"
 Write-Host "Siguiente:  .\infra\smoke_test.ps1"

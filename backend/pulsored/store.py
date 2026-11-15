@@ -4,12 +4,15 @@
 """
 import copy
 import itertools
-import json
+import logging
 import os
 import threading
+import time
 import uuid
 
-from . import clock, config
+from . import clock, config, domain
+
+log = logging.getLogger("pulsored.store")
 
 PK = {
     "reports": "zone_id",
@@ -23,9 +26,7 @@ PK = {
 _seq = itertools.count(1)
 _SYS = {"_rid", "_self", "_etag", "_attachments", "_ts"}
 
-_ZONES_FILE = os.path.join(os.path.dirname(__file__), "data", "zones.json")
-with open(_ZONES_FILE, encoding="utf-8") as _f:
-    ZONES = {z["id"]: z for z in json.load(_f)}
+ZONES = domain.ZONES   # catálogo único (contracts/zones.json)
 
 
 def clean(d):
@@ -39,6 +40,13 @@ class BaseStore:
 
     def list_zones(self):
         return list(ZONES.values())
+
+    def filter_incidents(self, items, incident_type=None, priority_level=None, status=None):
+        out = [i for i in items
+               if (not incident_type or i.get("incident_type", "COLECTIVA") == incident_type)
+               and (not priority_level or i.get("priority_level") == priority_level)
+               and (not status or i.get("status") == status)]
+        return sorted(out, key=lambda i: -(i.get("priority_score") or 0))
 
     def add_history(self, entity_id, frm, to, actor, action, note=""):
         """Historial append-only (RF-AZ-05/15)."""
@@ -83,25 +91,37 @@ class MemoryStore(BaseStore):
     # ---- consultas específicas ----
     def reports_unlinked_since(self, zone, group, since):
         return [r for r in self._all("reports")
-                if r["zone_id"] == zone and r.get("problem_group") == group and r["created_at"] >= since
+                if r["zone_id"] == zone and r.get("corr_group") == group and r["created_at"] >= since
                 and not r.get("incident_id") and r["status"] != "CERRADA"]
+
+    def count_reports_by_user_since(self, user_key, since):
+        return len([r for r in self._all("reports") if r["user_key"] == user_key and r["created_at"] >= since])
 
     def reports_for_incident(self, incident_id, zone):
         return [r for r in self._all("reports") if r["zone_id"] == zone and r.get("incident_id") == incident_id]
 
     def find_open_incident(self, zone, group):
         for i in self._all("incidents"):
-            if i["zone_id"] == zone and i["problem_group"] == group and i["status"] != "CERRADA":
+            if i["zone_id"] == zone and i.get("corr_group") == group and i["status"] != "CERRADA" \
+                    and i.get("incident_type", "COLECTIVA") == "COLECTIVA":
+                return i
+        return None
+
+    def find_open_typed_incident(self, zone, incident_type, antenna_id):
+        for i in self._all("incidents"):
+            if i["zone_id"] == zone and i.get("incident_type") == incident_type and i["status"] != "CERRADA" \
+                    and antenna_id in (i.get("antenna_ids") or []):
                 return i
         return None
 
     def open_incidents_in_zone(self, zone):
-        return [i for i in self._all("incidents") if i["zone_id"] == zone and i["status"] != "CERRADA"]
+        return [i for i in self._all("incidents") if i["zone_id"] == zone and i["status"] != "CERRADA"
+                and i.get("incident_type", "COLECTIVA") == "COLECTIVA"]
 
-    def list_incidents(self, zone=None, include_closed=False):
+    def list_incidents(self, zone=None, include_closed=False, **filters):
         out = [i for i in self._all("incidents")
                if (zone is None or i["zone_id"] == zone) and (include_closed or i["status"] != "CERRADA")]
-        return sorted(out, key=lambda i: -(i.get("priority_score") or 0))
+        return self.filter_incidents(out, **filters)
 
     def count_incidents_since(self, zone, since, exclude_id=None):
         return len([i for i in self._all("incidents")
@@ -140,10 +160,25 @@ class CosmosStore(BaseStore):
         kw = {"partition_key": pk} if pk is not None else {"enable_cross_partition_query": True}
         return [clean(d) for d in self._cont(c).query_items(sql, parameters=params or [], **kw)]
 
+    @staticmethod
+    def _retry(fn, attempts=4):
+        """Reintento propio ante 429/503 de Cosmos (además del que hace el SDK). RF-AZ-27."""
+        from azure.cosmos import exceptions
+        for i in range(attempts):
+            try:
+                return fn()
+            except exceptions.CosmosResourceExistsError:
+                raise
+            except exceptions.CosmosHttpResponseError as e:
+                if e.status_code not in (429, 503) or i == attempts - 1:
+                    raise
+                log.warning("Cosmos %s; reintento %d", e.status_code, i + 1)
+                time.sleep(min(4.0, 0.5 * 2 ** i))
+
     def create(self, c, doc):
         from azure.cosmos import exceptions
         try:
-            self._cont(c).create_item(doc)
+            self._retry(lambda: self._cont(c).create_item(doc))
             return True
         except exceptions.CosmosResourceExistsError:
             return False
@@ -156,12 +191,17 @@ class CosmosStore(BaseStore):
             return None
 
     def upsert(self, c, doc):
-        self._cont(c).upsert_item(doc)
+        self._retry(lambda: self._cont(c).upsert_item(doc))
+
+    def count_reports_by_user_since(self, user_key, since):
+        r = self._q("reports", "SELECT VALUE COUNT(1) FROM c WHERE c.user_key=@u AND c.created_at>=@t",
+                    [{"name": "@u", "value": user_key}, {"name": "@t", "value": since}])
+        return sum(r) if r else 0
 
     def reports_unlinked_since(self, zone, group, since):
         return self._q(
             "reports",
-            "SELECT * FROM c WHERE c.zone_id=@z AND c.problem_group=@g AND c.created_at>=@t "
+            "SELECT * FROM c WHERE c.zone_id=@z AND c.corr_group=@g AND c.created_at>=@t "
             "AND (NOT IS_DEFINED(c.incident_id) OR IS_NULL(c.incident_id)) AND c.status != 'CERRADA'",
             [{"name": "@z", "value": zone}, {"name": "@g", "value": group}, {"name": "@t", "value": since}], pk=zone)
 
@@ -169,16 +209,25 @@ class CosmosStore(BaseStore):
         return self._q("reports", "SELECT * FROM c WHERE c.zone_id=@z AND c.incident_id=@i",
                        [{"name": "@z", "value": zone}, {"name": "@i", "value": incident_id}], pk=zone)
 
+    _COLECTIVA = "(NOT IS_DEFINED(c.incident_type) OR c.incident_type = 'COLECTIVA')"
+
     def find_open_incident(self, zone, group):
-        r = self._q("incidents", "SELECT * FROM c WHERE c.zone_id=@z AND c.problem_group=@g AND c.status != 'CERRADA'",
-                    [{"name": "@z", "value": zone}, {"name": "@g", "value": group}], pk=zone)
+        r = self._q("incidents", "SELECT * FROM c WHERE c.zone_id=@z AND c.corr_group=@g AND c.status != 'CERRADA' AND "
+                    + self._COLECTIVA, [{"name": "@z", "value": zone}, {"name": "@g", "value": group}], pk=zone)
+        return r[0] if r else None
+
+    def find_open_typed_incident(self, zone, incident_type, antenna_id):
+        r = self._q("incidents", "SELECT * FROM c WHERE c.zone_id=@z AND c.incident_type=@t AND c.status != 'CERRADA' "
+                    "AND ARRAY_CONTAINS(c.antenna_ids, @a)",
+                    [{"name": "@z", "value": zone}, {"name": "@t", "value": incident_type},
+                     {"name": "@a", "value": antenna_id}], pk=zone)
         return r[0] if r else None
 
     def open_incidents_in_zone(self, zone):
-        return self._q("incidents", "SELECT * FROM c WHERE c.zone_id=@z AND c.status != 'CERRADA'",
+        return self._q("incidents", "SELECT * FROM c WHERE c.zone_id=@z AND c.status != 'CERRADA' AND " + self._COLECTIVA,
                        [{"name": "@z", "value": zone}], pk=zone)
 
-    def list_incidents(self, zone=None, include_closed=False):
+    def list_incidents(self, zone=None, include_closed=False, **filters):
         conds, params = [], []
         if zone:
             conds.append("c.zone_id=@z")
@@ -187,7 +236,7 @@ class CosmosStore(BaseStore):
             conds.append("c.status != 'CERRADA'")
         sql = "SELECT * FROM c" + (" WHERE " + " AND ".join(conds) if conds else "")
         out = self._q("incidents", sql, params, pk=zone if zone else None)
-        return sorted(out, key=lambda i: -(i.get("priority_score") or 0))
+        return self.filter_incidents(out, **filters)
 
     def count_incidents_since(self, zone, since, exclude_id=None):
         r = self._q("incidents", "SELECT VALUE COUNT(1) FROM c WHERE c.zone_id=@z AND c.opened_at>=@t AND c.id != @x",

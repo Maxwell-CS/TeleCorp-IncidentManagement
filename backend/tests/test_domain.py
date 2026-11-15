@@ -1,6 +1,14 @@
 from pulsored import domain
 
 
+def test_catalog_comes_from_contracts():
+    assert "LIM-SURCO" in domain.ZONES and len(domain.ZONES) == 12
+    assert domain.ANTENNA_ZONE["ANT-LIM-001"] == "LIM-SURCO"
+    assert domain.CATEGORIES == ["SIN_INTERNET", "INTERNET_LENTO", "SIN_SENAL", "LLAMADAS", "SMS", "OTRO"]
+    assert len(domain.EVENT_TYPES) == 7
+    assert domain.STATUS_LABELS["EN_ATENCION"] == "Siendo atendida"
+
+
 def test_transitions():
     assert domain.can_transition("REGISTRADA", "EN_REVISION")
     assert domain.can_transition("SOLUCIONADA", "EN_REVISION")  # reapertura
@@ -21,31 +29,47 @@ def test_priority_levels_and_bounds():
     assert domain.priority_level(74) == "ALTA"
     assert domain.priority_level(25) == "MEDIA"
     assert domain.priority_level(24) == "BAJA"
-    top = domain.compute_priority(10 ** 6, "SALUD", True, 1.0, 99, 99)
-    assert top["score"] == 100
+    assert domain.compute_priority(10 ** 6, "SALUD", True, 1.0, 99, 99)["score"] == 100
 
 
-def _ev(ant, typ, at):
-    return {"antenna_id": ant, "event_type": typ, "occurred_at": at}
+def _ev(ant, typ, at, state=None, **kw):
+    return {"id": f"{ant}-{at}", "antenna_id": ant, "event_type": typ, "occurred_at": at, "new_state": state, **kw}
 
 
-def test_antenna_evidence_latest_wins():
-    evs = [_ev("A1", "ANTENNA_DOWN", "2026-11-15T10:00:00.000000Z"),
-           _ev("A1", "ANTENNA_DISABLED", "2026-11-15T10:05:00.000000Z"),
-           _ev("A2", "ANTENNA_DOWN", "2026-11-15T10:01:00.000000Z"),
-           _ev("A2", "ANTENNA_RECOVERED", "2026-11-15T10:30:00.000000Z")]
+def test_antenna_evidence_by_new_state_and_order():
+    evs = [_ev("A2", "RECUPERACION", "2026-11-15T10:30:00.000000Z", "NORMAL"),     # llega desordenado
+           _ev("A1", "FALLA", "2026-11-15T10:00:00.000000Z", "CAIDA"),
+           _ev("A1", "FALLA", "2026-11-15T10:05:00.000000Z", "INHABILITADA"),
+           _ev("A2", "FALLA", "2026-11-15T10:01:00.000000Z", "CAIDA")]
     e = domain.antenna_evidence(evs)
     assert e["antenna_ids"] == ["A1"] and e["weight"] == 1.0 and e["confirmed"]
     assert e["first_anomaly_at"] == "2026-11-15T10:00:00.000000Z"
 
 
-def test_predictive_risk_does_not_confirm():
-    e = domain.antenna_evidence([_ev("A1", "PREDICTIVE_RISK", "2026-11-15T10:00:00.000000Z")])
-    assert not e["confirmed"] and e["weight"] == 0.2
+def test_weights_per_contract():
+    assert domain.event_weight({"event_type": "FALLA", "new_state": "CAIDA"}) == 0.7
+    assert domain.event_weight({"event_type": "SATURACION", "new_state": "SATURADA"}) == 0.5
+    assert domain.event_weight({"event_type": "PREVENTIVA"}) == 0.0
+    deg = domain.antenna_evidence([_ev("A1", "DEGRADACION", "2026-11-15T10:00:00.000000Z", "CAIDA")])
+    assert not deg["confirmed"] and deg["weight"] == domain.DEGRADATION_WEIGHT
+    prev = domain.antenna_evidence([_ev("A1", "PREVENTIVA", "2026-11-15T10:00:00.000000Z", "NORMAL")])
+    assert not prev["confirmed"] and prev["antenna_ids"] == []
 
 
-def test_critical_site_and_report_id_zone():
-    assert domain.detect_critical_site(["No hay señal cerca del Hospital Loayza"])
-    assert not domain.detect_critical_site(["no tengo internet"])
-    assert domain.zone_of_report_id("R-Z07-ABCDEF") == "Z07"
-    assert domain.zone_of_report_id("basura") == ""
+def test_ids_with_hyphenated_zones():
+    assert domain.zone_of_report_id("REP-LIM-SURCO-ABCDEFGH") == "LIM-SURCO"
+    assert domain.zone_of_incident_id("INC-LIM-SANMIGUEL-1763215200") == "LIM-SANMIGUEL"
+    assert domain.zone_of_incident_id("INC-LIM-SURCO-PREVENTIVA-ANT-LIM-001-1") == "LIM-SURCO"
+    assert domain.zone_of_report_id("basura") == "" and domain.zone_of_report_id("REP-NADA-X") == ""
+
+
+def test_nearest_zone_and_critical_sites():
+    surco = domain.ZONES["LIM-SURCO"]["centroid"]
+    assert domain.nearest_zone(surco["lat"] + 0.001, surco["lng"]) == "LIM-SURCO"
+    assert domain.critical_site_kind(["No hay señal cerca del Hospital"]) == "HOSPITAL"
+    assert domain.critical_site_kind(["no tengo internet"]) is None
+
+
+def test_correlation_group_modes():
+    assert domain.correlation_group("LLAMADAS", "ZONA") == "ZONA"
+    assert domain.correlation_group("LLAMADAS", "ZONA_Y_CATEGORIA") == "VOZ"

@@ -15,20 +15,17 @@
       <div class="row">
         <div><label for="doc">Documento de identidad</label><input id="doc" required pattern="[A-Za-z0-9]{6,15}" maxlength="15"></div>
         <div><label for="phone">Celular</label><input id="phone" required pattern="\+?[0-9]{7,15}" placeholder="+51999999999"></div>
-        <div><label for="email">Correo (opcional, para avisos)</label><input id="email" type="email" maxlength="120"></div>
+        <div><label for="email">Correo (para recibir avisos)</label><input id="email" type="email" maxlength="120"></div>
       </div>
       <div class="row">
-        <div><label for="zone">Zona</label><select id="zone" required></select></div>
-        <div><label for="ptype">Tipo de problema</label>
-          <select id="ptype" required>
-            <option value="SIN_DATOS">Sin datos móviles</option><option value="LENTITUD">Internet lento</option>
-            <option value="SIN_SENAL">Sin señal</option><option value="LLAMADAS">Fallas en llamadas</option>
-            <option value="SIN_SERVICIO">Sin ningún servicio</option><option value="OTRO">Otro</option>
-          </select></div>
+        <div><label for="zone">Zona</label><select id="zone" required></select>
+          <button type="button" id="geo" class="sec small">📍 Usar mi ubicación</button> <span id="geomsg" class="mut"></span></div>
+        <div><label for="category">Tipo de problema</label><select id="category" required></select></div>
         <div><label for="when">¿Cuándo empezó?</label><input id="when" type="datetime-local" required></div>
       </div>
       <label for="desc">Descripción</label>
-      <textarea id="desc" required maxlength="1000" placeholder="Cuéntanos qué pasa (por ejemplo, si es cerca de un hospital o colegio)"></textarea>
+      <textarea id="desc" required minlength="3" maxlength="1000" placeholder="Cuéntanos qué pasa (por ejemplo, si es cerca de un hospital o colegio)"></textarea>
+      <p class="mut">Tus datos personales solo se usan para avisarte del estado del servicio; no se comparten con otros sistemas.</p>
       <div class="actions"><button id="send" type="submit">Enviar reporte</button></div>
       <div id="result"></div>
     </form>
@@ -36,7 +33,11 @@
 
   <section class="card">
     <h2>Consultar el estado de mi reporte</h2>
-    <div class="row"><input id="code" placeholder="Código, p. ej. R-Z07-ABCDEFGHIJKLMNOP" class="mono"><div><button id="lookup" class="sec">Consultar</button></div></div>
+    <div class="row">
+      <div><label for="code">Código del reporte</label><input id="code" placeholder="REP-LIM-SURCO-ABCDEFGHIJKLMNOP" class="mono"></div>
+      <div><label for="verify">Últimos 4 dígitos de tu celular</label><input id="verify" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></div>
+      <div style="align-self:end"><button id="lookup" class="sec">Consultar</button></div>
+    </div>
     <div id="status"></div>
   </section>
 </main>

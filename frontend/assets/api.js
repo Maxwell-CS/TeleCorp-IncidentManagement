@@ -6,7 +6,7 @@ export async function cfg() {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** fetch con timeout, reintentos con backoff exponencial + jitter (solo ante 5xx/429/red). */
+/** fetch con timeout y reintentos con backoff exponencial + jitter (solo ante 5xx/red; 429 se devuelve al llamador). */
 export async function api(path, { method = 'GET', body, token, retries = 3 } = {}) {
   const { apiBase } = await cfg();
   const headers = { 'Content-Type': 'application/json' };
@@ -19,7 +19,7 @@ export async function api(path, { method = 'GET', body, token, retries = 3 } = {
       const r = await fetch(apiBase + '/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
       clearTimeout(t);
       const data = await r.json().catch(() => ({}));
-      if (r.status < 500 && r.status !== 429) return { status: r.status, data };
+      if (r.status < 500) return { status: r.status, data };
       last = { status: r.status, data };
     } catch (e) {
       clearTimeout(t);
@@ -29,6 +29,27 @@ export async function api(path, { method = 'GET', body, token, retries = 3 } = {
   }
   return last;
 }
+
+/** Zonas y categorías (contracts/zones.json y enums.json): de la API, o de la copia estática si no responde. */
+export async function loadCatalog() {
+  const [z, c] = await Promise.all([api('/zones', { retries: 1 }), api('/catalog', { retries: 1 })]);
+  const zones = z.data?.items || (await (await fetch('/zones.json')).json()).zones;
+  let category = c.data?.category;
+  if (!category) {
+    const enums = await (await fetch('/enums.json')).json();
+    category = enums.category;
+    Object.assign(STATUS_LABEL, enums.status_labels);
+  } else Object.assign(STATUS_LABEL, c.data.status_labels);
+  return { zones, category };
+}
+
+export const STATUS_LABEL = {
+  REGISTRADA: 'Registrada', EN_REVISION: 'En revisión', EN_ATENCION: 'Siendo atendida', SOLUCIONADA: 'Solucionada', CERRADA: 'Cerrada',
+};
+export const CATEGORY_LABEL = {
+  SIN_INTERNET: 'Sin internet', INTERNET_LENTO: 'Internet lento', SIN_SENAL: 'Sin señal',
+  LLAMADAS: 'Fallas en llamadas', SMS: 'Fallas en SMS', OTRO: 'Otro',
+};
 
 export const $ = (s, el = document) => el.querySelector(s);
 export function h(tag, attrs = {}, ...kids) {
@@ -42,7 +63,7 @@ export function h(tag, attrs = {}, ...kids) {
   return el; // todo texto entra por nodos de texto: sin innerHTML, sin XSS
 }
 export const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
-export const pill = (v) => h('span', { class: 'pill ' + v }, v ?? '—');
+export const pill = (v) => h('span', { class: 'pill ' + v }, STATUS_LABEL[v] || v || '—');
 export function uuid() {
   return crypto.randomUUID ? crypto.randomUUID() : 'k-' + Date.now() + '-' + Math.random().toString(36).slice(2);
 }

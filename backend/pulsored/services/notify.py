@@ -1,9 +1,10 @@
-"""Notificaciones al usuario en 3 etapas (RF-AZ-16/17). Un mensaje por usuario, etapa y ciclo (idempotente).
+"""Notificaciones al usuario en 3 etapas (RF-AZ-23/24/25). Un mensaje por usuario, etapa y ciclo (idempotente).
 Los mensajes de la cola NO llevan datos de contacto: se leen del reporte solo al enviar."""
 from .. import clock, domain
 from .ai import STAGE_TEXT
 
 QUEUE = "notifications"
+STAGE_LABEL = {"EVALUANDO": "Evaluando", "IDENTIFICADA": "Incidencia identificada", "RESTABLECIDO": "Servicio restablecido"}
 SUBJECTS = {
     "EVALUANDO": "PulsoRed: estamos evaluando tu reporte",
     "IDENTIFICADA": "PulsoRed: incidencia identificada",
@@ -13,6 +14,8 @@ SUBJECTS = {
 
 def enqueue_notifications(store, queue, incident_id, zone_id, stage, cycle=0):
     inc = store.get("incidents", incident_id, zone_id)
+    if not inc or inc.get("incident_type", "COLECTIVA") != "COLECTIVA":
+        return 0  # PREVENTIVA/ESTRUCTURAL no tienen usuarios que avisar
     texts = ((inc.get("ai") or {}).get("notification_text")) or STAGE_TEXT
     template = texts.get(stage) or STAGE_TEXT[stage]
     zone = (store.get_zone(zone_id) or {}).get("name", zone_id)
@@ -48,4 +51,7 @@ def deliver(store, sender, msg):
         "id": key, "incident_id": inc_id, "stage": msg["stage"], "status": "SENT",
         "channels": channels, "sent_at": clock.iso(),
     })
+    if report:  # estado de entrega visible en el historial del reporte (RF-AZ-25)
+        store.add_history(msg["report_id"], report.get("status"), report.get("status"), "SISTEMA", "NOTIFICATION_SENT",
+                          f'{STAGE_LABEL.get(msg["stage"], msg["stage"])}: {", ".join(channels) or "sin contacto"}')
     return "sent" if channels else "no_contact"

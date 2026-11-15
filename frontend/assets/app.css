@@ -23,3 +23,6 @@ th{color:var(--mut);font-weight:600}tr.sel{background:#0b1220}tr.row-click{curso
 ol.tl{list-style:none;margin:0;padding:0}ol.tl li{border-left:2px solid var(--line);padding:2px 0 10px 12px;margin-left:6px;color:var(--mut);font-size:13px}
 ol.tl b{color:var(--fg)}.grid2{display:grid;grid-template-columns:1.3fr 1fr;gap:18px}@media(max-width:820px){.grid2{grid-template-columns:1fr}}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.mut{color:var(--mut);font-size:13px}.mono{font-family:ui-monospace,Consolas,monospace}
+button.small{padding:5px 10px;font-size:13px;margin-top:6px}
+.pill.INHABILITADA,.pill.CAIDA{border-color:var(--bad);color:var(--bad)}.pill.SATURADA{border-color:var(--warn);color:var(--warn)}
+.msg:not(.ok):not(.err):not(.warn){background:#0b1220;border:1px solid var(--line)}

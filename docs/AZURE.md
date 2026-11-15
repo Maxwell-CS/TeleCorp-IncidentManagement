@@ -6,100 +6,83 @@
 
 ## 0. Estado y decisiones adoptadas
 
-**Estado (2026-11-15):** el backend, el frontend y los scripts están escritos y probados en local (41 pruebas). **Nada está desplegado.** Falta adaptar el código a los contratos compartidos (ver §9).
+**Estado (2026-11-15):** el código está **adaptado a los contratos compartidos** y probado en local (56 pruebas, simulación de punta a punta y servidor de desarrollo). **Nada está desplegado.** Las integraciones con AWS y GCP funcionan en modo simulado hasta que se completen sus URLs y claves en `.env` (§10).
 
 Decisiones del equipo que Azure asume (`docs/AWS.md` §0):
 
 | Decisión | Valor | Efecto en Azure |
 |---|---|---|
 | IA generativa (Gemini) | Sí | Azure llama a `/ai/classify-report` y `/ai/summarize-incident` de GCP |
-| Reportes relacionados | Misma zona + tiempo, **cualquier tipo** (tipo configurable) | El correlador cuenta por zona; el modo `ZONA_Y_CATEGORIA` es opcional |
-| Tipos de evento de AWS | **7**: FALLA, SATURACION, DEGRADACION, RECUPERACION, PREVENTIVA, ESTRUCTURAL, PROLONGADA | Azure debe aceptar los 7 |
-| Recurrencia | AWS la detecta y emite ESTRUCTURAL; GCP la analiza | Azure crea una incidencia `ESTRUCTURAL` al recibirla |
+| Reportes relacionados | Misma zona + tiempo, **cualquier tipo** | `CORRELATION_MODE=ZONA` (por defecto); `ZONA_Y_CATEGORIA` opcional |
+| Tipos de evento de AWS | **7**: FALLA, SATURACION, DEGRADACION, RECUPERACION, PREVENTIVA, ESTRUCTURAL, PROLONGADA | Azure acepta los 7 |
+| Recurrencia | AWS la detecta y emite ESTRUCTURAL; GCP la analiza | Azure crea una incidencia `ESTRUCTURAL` y la usa en el factor R |
 
 ## 1. Alcance
 
 Azure es el **plano de cliente e incidencias**: portal de usuario, reportes, detección de incidencias colectivas, correlación con eventos de antenas, priorización, ciclo de vida, notificaciones y API para la consola. Vive fuera del Lab de AWS para seguir funcionando si este se apaga (RNF-05).
 
 **No hago:** telemetría, estado de antenas, Step Functions, predicciones (AWS) · modelos, analítica, IA generativa en sí (GCP).
-**Consola de operación (SPA):** la construye P3 (RF-AZ-19). Azure le da los datos por API y el hosting. Mi consola actual es una base opcional.
+**Consola de operación (SPA):** según el reparto la construye P3 (RF-AZ-19). Azure le da los datos por API y el hosting. `frontend/consola.html` es una consola funcional que P3 puede usar de base.
 
 **Principio:** nada de lo mío depende de AWS ni de GCP para funcionar. Si ellos caen, sigo registrando reportes, detectando colectivas y notificando (RF-AZ-29).
 
 ## 2. Requisitos y estado
 
-✅ cumple en el código local · 🟡 parcial · ❌ falta · ➕ extra. "Cumple" = probado en local, sin desplegar.
+✅ cumple (probado en local, sin desplegar) · 🟡 parcial · ❌ falta · ➕ extra
 
-### A. Reportes
-| ID | Estado | Nota |
+| ID | Estado | Cómo |
 |---|---|---|
 | RF-AZ-01 Portal público | ✅ | `frontend/index.html` |
-| RF-AZ-02 Campos del reporte | 🟡 | Falta coordenadas → zona (hoy el usuario elige la zona) |
-| RF-AZ-03 ID único + idempotencia | ✅ | `report_id` determinista desde `idempotency_key` |
-| RF-AZ-04 Consultar estado con dato de verificación | 🟡 | Falta el dato de verificación |
+| RF-AZ-02 Campos del reporte | ✅ | Documento, celular, correo, zona **o coordenadas → zona más cercana**, fecha, categoría (`enums.json`), descripción |
+| RF-AZ-03 ID único + idempotencia | ✅ | `REP-<zona>-<hash>` determinista desde `idempotency_key` |
+| RF-AZ-04 Consulta con dato de verificación | ✅ | Código + últimos 4 dígitos del celular; sin eso responde 404 |
 | RF-AZ-05 Estados + transiciones inválidas | ✅ | `409` y queda en el historial |
-| RF-AZ-06 Historial inmutable con actor | ✅ | |
-| RF-AZ-07 Validación y límite de abusos | 🟡 | Falta límite de tasa |
-
-### B. Incidencias colectivas
-| ID | Estado | Nota |
-|---|---|---|
-| RF-AZ-08 Reportes relacionados | 🟡 | Hoy zona + grupo de problema; falta el modo `ZONA` (cualquier tipo) |
-| RF-AZ-09 ≥10 usuarios distintos, ventana <24 h | ✅ | `user_key = sha256(documento\|teléfono)` |
+| RF-AZ-06 Historial inmutable con actor | ✅ | USUARIO / SISTEMA / IA / OPERADOR |
+| RF-AZ-07 Validación y límite de abusos | ✅ | JSON Schema, tope de tamaño, **`RATE_LIMIT_PER_HOUR` por usuario** (`429` + `Retry-After`) |
+| RF-AZ-08 Reportes relacionados | ✅ | Modo `ZONA` (cualquier categoría) o `ZONA_Y_CATEGORIA` |
+| RF-AZ-09 ≥10 usuarios distintos, ventana <24 h | ✅ | `user_key = sha256(documento\|celular)`; umbral y ventana configurables |
 | RF-AZ-10 Agrupar conservando relación | ✅ | |
 | RF-AZ-11 Sin duplicar bajo concurrencia | ✅ | ID determinista + `create_item` (409) |
 | RF-AZ-12 Reabrir | ✅ | Hasta 5 ciclos |
 | RF-AZ-13 Cierre automático | ✅ | |
-
-### C. Integración con infraestructura
-| ID | Estado | Nota |
-|---|---|---|
-| RF-AZ-14 Eventos idempotentes + proyección local | 🟡 | Falta el sobre común y orden por `occurred_at`/`detected_at` |
-| RF-AZ-15 Correlación, origen y tiempo de detección | ✅ | `detected_by`, `detection_lag_s` |
-| RF-AZ-16 Incidencias desde eventos | 🟡 | Falta crear incidencias PREVENTIVA y ESTRUCTURAL |
-| RF-AZ-17 Reconciliar con `GET /antennas` | ❌ ➕ | |
-
-### D. Priorización y gestión
-| ID | Estado | Nota |
-|---|---|---|
-| RF-AZ-18 Prioridad explicable | 🟡 | Fórmula lista; falta leer pesos de `/config` y ajustar pesos al contrato (§6.2) |
-| RF-AZ-19 Consola | 🟡 | La hace P3; mi base tiene bandeja, detalle y acciones |
-| RF-AZ-20 Acciones del operador | ✅ | |
-| RF-AZ-21 Solo operadores | ✅ | Token (plan: auth de Static Web Apps) |
-| RF-AZ-22 Tiempo real | ❌ ➕ | Sondeo corto |
-
-### E. Notificaciones
-| ID | Estado | Nota |
-|---|---|---|
+| RF-AZ-14 Eventos idempotentes + proyección local | ✅ | Sobre común validado contra `contracts/events`; orden por `detected_at`; `GET /api/antennas` usa la proyección si AWS no responde |
+| RF-AZ-15 Correlación, origen y tiempo de detección | ✅ | `detected_by` = ANTENA/USUARIOS/AMBOS, `detection_lag_s` |
+| RF-AZ-16 Incidencias desde eventos | ✅ | FALLA/SATURACION/PROLONGADA → evidencia; RECUPERACION → propone Solucionada; **PREVENTIVA y ESTRUCTURAL → incidencia de su tipo** |
+| RF-AZ-17 Reconciliar con `GET /antennas` | 🟡 ➕ | La consola consulta `GET /antennas` de AWS; no hay tarea periódica |
+| RF-AZ-18 Prioridad explicable | ✅ | 40U+25Z+20A+10D+5R, factores guardados, recalculada en cada cambio |
+| RF-AZ-19 Consola | 🟡 | Bandeja, filtros, detalle, línea de tiempo, antenas, riesgos y resumen IA. Falta mapa y dashboard de Looker (P3) |
+| RF-AZ-20 Acciones del operador | ✅ | Confirmar, descartar, cambiar estado **o prioridad** |
+| RF-AZ-21 Solo operadores | ✅ | Token `x-operator-token` (el plan sugiere la auth de Static Web Apps) |
+| RF-AZ-22 Tiempo real | ❌ ➕ | Sondeo cada 15 s |
 | RF-AZ-23 Tres etapas | ✅ | |
-| RF-AZ-24 Correo + SMS con degradación | 🟡 | SMS siempre simulado; correo real si ACS se crea |
-| RF-AZ-25 Uno por usuario y etapa | 🟡 | Falta limitar la tasa y mostrar el estado de entrega en el historial |
+| RF-AZ-24 Correo + SMS con degradación | 🟡 | Correo real con ACS si se crea; **SMS simulado** (la cuenta de estudiante no permite números) |
+| RF-AZ-25 Uno por usuario y etapa | ✅ | Idempotente; tasa limitada por la concurrencia de Service Bus; **estado de entrega en el historial del reporte** |
 | RF-AZ-26 Texto por IA | ✅ ➕ | |
-
-### F. Escala e integraciones
-| ID | Estado | Nota |
-|---|---|---|
-| RF-AZ-27 Picos | 🟡 | Falta reintento explícito ante `429` de Cosmos |
-| RF-AZ-28 Respaldo continuo | ❌ | Activar al desplegar |
+| RF-AZ-27 Picos | ✅ | `202` + procesamiento asíncrono por change feed + reintentos ante `429` de Cosmos |
+| RF-AZ-28 Respaldo continuo | 🟡 | `deploy.ps1` crea Cosmos con respaldo continuo de 7 días (si la cuenta lo permite); no verificado |
 | RF-AZ-29 Modo degradado | ✅ | |
-| RF-AZ-30 IA por reporte | ❌ | Hoy solo enriquezco el incidente |
-| RF-AZ-31 Resumen + causa probable | 🟡 | Falta `probable_cause` y `recommended_action` |
-| RF-AZ-32 Exportar reportes e incidencias | 🟡 | Hoy solo incidentes |
-| RF-AZ-33 Leer `GET /config` | ❌ | |
+| RF-AZ-30 IA por reporte | ✅ | `classify-report` tras guardar (change feed), timeout 4 s, reglas de respaldo, fuente `gemini`/`reglas` |
+| RF-AZ-31 Resumen + causa probable | ✅ | `summarize-incident` (8 s): resumen, causa probable, acción recomendada |
+| RF-AZ-32 Exportar reportes e incidencias | ✅ | `incident.upsert` y `report.upsert` con el sobre común |
+| RF-AZ-33 Leer `GET /config` | ✅ | Con caché (`CONFIG_CACHE_S`) y valores por defecto |
 
-**Total:** 15 ✅ · 13 🟡 · 5 ❌ (RF-AZ-17 y 22 son extras).
+**Total:** 28 ✅ · 4 🟡 · 1 ❌ (extra).
 
-## 3. Qué recibe Azure (APIs que Azure expone)
+## 3. Qué recibe Azure (APIs que Azure expone, prefijo `/api`)
 
-| # | Quién llama | Ruta | Autenticación | Contenido |
-|---|---|---|---|---|
-| 1 | Usuario | `POST /api/reports` | Pública, con validación de esquema y tope de 8 KB | Reporte |
-| 2 | Usuario | `GET /api/reports/{id}` | El código (y dato de verificación) | Estado e historial, sin datos personales |
-| 3 | **AWS** | `POST /events/infra` | **`X-API-Key`** (`azure_api_key`) | Sobre `antenna.event` |
-| 4 | Operador / consola | `GET/PATCH /api/incidents…`, `PATCH /api/reports/{id}` | `x-operator-token` | Gestión |
-| 5 | Operador | `GET /api/infra/events`, `POST /api/ops/redrive` | `x-operator-token` | Operación |
+| Quién llama | Ruta | Autenticación | Contenido |
+|---|---|---|---|
+| Usuario | `POST /api/reports` | Pública (esquema, tope 8 KB, límite de tasa) | Reporte |
+| Usuario | `GET /api/reports/{id}?verify=1234` | Código + últimos 4 dígitos del celular | Estado e historial, sin datos personales |
+| Portal | `GET /api/zones`, `GET /api/catalog` | Pública | Catálogo de zonas y categorías |
+| **AWS** | `POST /api/events/infra` | **`X-API-Key`** = `AZURE_INBOUND_API_KEY` | Sobre común `antenna.event` |
+| Consola | `GET /api/incidents?zone_id&incident_type&priority_level&status&include_closed=1` | `x-operator-token` | Bandeja por prioridad |
+| Consola | `GET/PATCH /api/incidents/{id}` | `x-operator-token` | Detalle; acciones `CONFIRMAR`, `DESCARTAR`, `CAMBIAR_ESTADO`, `CAMBIAR_PRIORIDAD` |
+| Consola | `PATCH /api/reports/{id}` | `x-operator-token` | Cambiar estado de un reporte |
+| Consola | `GET /api/antennas`, `GET /api/predictions` | `x-operator-token` | AWS en vivo o proyección local |
+| Consola | `GET /api/infra/events`, `GET /api/settings`, `POST /api/ops/redrive` | `x-operator-token` | Eventos, configuración efectiva, reenvío de DLQ |
 
-**La ruta 3 es el contrato con AWS.** AWS la llama desde su `outbox-azure` (`docs/AWS.md` §2). La URL base que AWS guarda en SSM (`/pulsored/endpoints/azure`) debe incluir el prefijo de la Function App (`https://<app>.azurewebsites.net/api`), o hay que quitar el prefijo `api` en `host.json`. Acordarlo con P1.
+**URL base para AWS:** `https://<app>.azurewebsites.net/api` (P1 la guarda en SSM `/pulsored/endpoints/azure`; su outbox agrega `/events/infra`).
 
 ### 3.1 Reporte (portal → Azure)
 ```json
@@ -114,167 +97,137 @@ POST /api/reports
   "description": "No tengo internet desde las 2 pm"
 }
 ```
-Respuesta: `202 {"report_id":"REP-...","status":"REGISTRADA"}` · `200` con `duplicate:true` si se reenvía · `400` esquema inválido.
-`zone_id` sale de `contracts/zones.json`; `category` de `contracts/enums.json` (`SIN_INTERNET`, `INTERNET_LENTO`, `SIN_SENAL`, `LLAMADAS`, `SMS`, `OTRO`).
+`zone_id` o `location` (al menos uno). Respuesta: `202 {"report_id":"REP-LIM-SURCO-...","status":"REGISTRADA","zone_id":"LIM-SURCO"}` · `200` con `duplicate:true` · `400` · `429`.
 
 ### 3.2 Evento de AWS → Azure (`type: antenna.event`)
-Sobre común (`contracts/events/envelope.schema.json`) con el payload de `contracts/events/antenna-event.schema.json`:
+Sobre común (`contracts/events/envelope.schema.json`) + payload (`contracts/events/antenna-event.schema.json`):
 ```json
-POST /events/infra          (header: X-API-Key)
+POST /api/events/infra          (header: X-API-Key)
 {
   "event_id": "uuid determinista (uuid5)", "type": "antenna.event", "schema_version": "1.0",
   "source": "aws", "occurred_at": "2026-11-20T15:04:00Z", "correlation_id": "c1f0a9b2-...",
   "payload": {
     "antenna_id": "ANT-LIM-004", "zone_id": "LIM-SURCO", "episode_id": "EP-ANT-LIM-004-1763650860",
-    "event_type": "FALLA | SATURACION | DEGRADACION | RECUPERACION | PREVENTIVA | ESTRUCTURAL | PROLONGADA",
-    "severity": "INFO | BAJA | MEDIA | ALTA | CRITICA",
-    "previous_state": "NORMAL", "new_state": "CAIDA", "gb_per_min": 41.2,
-    "first_anomaly_at": "2026-11-20T15:01:00Z", "detected_at": "2026-11-20T15:03:00Z",
-    "prediction": {"probability": 0.82, "predicted_state": "CAIDA", "horizon_minutes": 60, "valid_until": "...", "model_version": "..."},
-    "recurrence": {"episodes_7d": 3, "episodes_30d": 5},
-    "elapsed_minutes": 95
+    "event_type": "FALLA", "severity": "ALTA", "previous_state": "NORMAL", "new_state": "CAIDA",
+    "gb_per_min": 41.2, "first_anomaly_at": "2026-11-20T15:01:00Z", "detected_at": "2026-11-20T15:03:00Z"
   }
 }
 ```
 `prediction` solo en PREVENTIVA · `recurrence` solo en ESTRUCTURAL · `elapsed_minutes` solo en PROLONGADA.
-Respuestas: `202` aceptado · `200 {"status":"duplicate"}` · `400` inválido (**AWS no reintenta**) · `401` clave inválida · `5xx` (AWS reintenta con su outbox y DLQ).
-Idempotencia: `create_item` con `id = event_id`; un `409` de Cosmos es un duplicado.
+Respuestas: `202 {"status":"accepted"}` · `200 {"status":"duplicate"}` · `400` inválido (**AWS no reintenta**) · `401` clave inválida · `5xx` (AWS reintenta con su outbox y DLQ).
 
 ## 4. Qué envía Azure
 
-| # | Destino | Llamada | Autenticación | Contenido | Si falla |
-|---|---|---|---|---|---|
-| 1 | **GCP** | `POST /ai/classify-report` (sincrónica, **después** de guardar; timeout 4 s) | `X-API-Key` | Texto del reporte, categoría declarada y tipo de zona. **Sin documento, teléfono ni correo** | `503` o timeout → reglas, `source=reglas` |
-| 2 | **GCP** | `POST /ai/summarize-incident` (timeout 8 s) | `X-API-Key` | Zona, usuarios, evidencia de antenas, hasta 10 textos sin datos personales | Sin resumen |
-| 3 | **GCP** | `POST /ingest/incidents` (`incident.upsert` y `report.upsert`) | `X-API-Key` | Incidencias y reportes, en cada cambio. `user_key` es un hash | Reintento por cola de Service Bus y DLQ |
-| 4 | **AWS** | `GET /config` | `X-API-Key` (clave `azure`) | Configuración global versionada | Caché y valores por defecto |
-| 5 | **AWS** | `GET /antennas`, `GET /predictions` | `X-API-Key` (clave `azure`) | Para la consola y la reconciliación (no es ruta crítica) | Se muestra el último dato conocido |
-| 6 | Usuarios | ACS Email (real) y SMS (simulado) | — | 3 etapas: evaluando → incidencia identificada → restablecido | Reintentos y DLQ |
+| Destino | Llamada (variables de `.env`) | Contenido | Si falla |
+|---|---|---|---|
+| **GCP** | `POST {GCP_API_BASE}{GCP_CLASSIFY_PATH}` (`/ai/classify-report`), timeout 4 s | `report_id`, texto sin datos personales, categoría declarada, tipo de zona | `503`/timeout → reglas (`source=reglas`) |
+| **GCP** | `POST {GCP_API_BASE}{GCP_SUMMARIZE_PATH}` (`/ai/summarize-incident`), timeout 8 s | Zona, usuarios, evidencia de antenas, hasta 10 textos | Resumen por reglas |
+| **GCP** | `POST {GCP_API_BASE}{GCP_INGEST_PATH}` (`/ingest/incidents`) | Sobre `incident.upsert` / `report.upsert` + `Idempotency-Key` | Reintento de Service Bus → DLQ; 4xx se registra y no se reintenta |
+| **AWS** | `GET {AWS_API_BASE}{AWS_CONFIG_PATH}` (`/config`) | Configuración global | Caché y valores por defecto |
+| **AWS** | `GET {AWS_API_BASE}/antennas`, `/predictions` | Para la consola | Proyección local |
+| Usuarios | ACS Email (real) y SMS (simulado) | 3 etapas | Reintentos y DLQ |
 
-Los cuerpos de GCP van en el sobre común (`source: "azure"`). Formato exacto de los payloads en `docs/global/GCP.md` §4.2.
-
-**Respuesta esperada de `classify-report`:** `{category, urgency, critical_site{mentioned,kind}, confidence, model_version, source}`.
-**Respuesta de `summarize-incident`:** `{summary, probable_cause, recommended_action, model_version}`.
+Todas las llamadas a AWS y GCP llevan `X-API-Key` (`AWS_API_KEY`, `GCP_API_KEY`). El texto que va a la IA pasa por un filtro que oculta números y correos escritos por el usuario.
 
 ## 5. Arquitectura en Azure
 
-Región `westus2` (la única cercana a AWS `us-east-1` que permite la política de la suscripción).
+Región `westus2`.
 
 | Componente | Uso |
 |---|---|
-| Functions (Python 3.12, consumo, modelo v2) | API HTTP, correlador, enlazador de infraestructura, notificador, exportador |
-| Durable Functions | Orquestador `incident_lifecycle` (ciclo de vida, escalamiento, reapertura) |
-| Cosmos DB (free tier, con respaldo a serverless) | Reportes, incidencias, historial, eventos, notificaciones |
+| Functions (Python 3.12, consumo, modelo v2) | API HTTP, clasificación + correlación, enlazador de infraestructura, notificador, exportador |
+| Durable Functions | Orquestador `incident_lifecycle` |
+| Cosmos DB (free tier o serverless, respaldo continuo 7 días) | Reportes, incidencias, historial, eventos, notificaciones |
 | Service Bus Basic | Colas `notifications` y `analytics-export`, con DLQ |
-| Communication Services Email | Correo real (si se puede automatizar el dominio administrado) |
-| Key Vault | Secretos, referenciados desde la Function App |
+| Communication Services Email | Correo real |
+| Key Vault | Secretos (Cosmos, Service Bus, token de operador, claves de AWS/GCP, `AZURE_INBOUND_API_KEY`) |
 | Static Web Apps (Free) | Portal y consola |
 | Application Insights | Logs y trazas |
 
 | Función | Disparador | Qué hace |
 |---|---|---|
-| `intake-report` | HTTP POST | Valida, guarda con idempotencia, `202` |
-| `reports-api`, `incidents-api` | HTTP | Consultas y acciones del operador |
-| `ingest-infra-event` | HTTP POST | Valida el sobre, guarda con `create_item` |
-| `infra-linker` | Change feed de `infra_events` | Enlaza eventos con incidentes de la zona, recalcula prioridad |
-| `correlator` | Change feed de `reports` | Cuenta usuarios distintos y abre o enlaza incidentes |
-| `incident-lifecycle` | Durable | EN_REVISION → EN_ATENCION → SOLUCIONADA → CERRADA, con reapertura |
-| `notifier` | Service Bus | Un mensaje por usuario y etapa |
+| `intake_report` | HTTP | Valida, límite de tasa, guarda, `202` |
+| `correlator_fn` | Change feed `reports` | Clasifica con IA (una vez), exporta el reporte, cuenta usuarios distintos, abre o enlaza la incidencia |
+| `ingest_infra_event` | HTTP | Valida el sobre común y lo guarda (`create_item`) |
+| `infra_linker` | Change feed `infra_events` | Evidencia, PREVENTIVA/ESTRUCTURAL, prioridad, señal a la orquestación, exportación |
+| `incident_lifecycle` | Durable | EN_REVISION → EN_ATENCION → SOLUCIONADA → CERRADA, con espera al operador, escalamiento y reapertura |
+| `notifier` | Service Bus | Un mensaje por usuario y etapa; estado en el historial |
 | `exporter` | Service Bus | `POST` a GCP |
 
-**Diferencia con `docs/global/PLAN.md`:** el plan usa Storage Queue, un `report-processor` y un `sweeper` con temporizador, y descarta Durable Functions. Yo implementé Durable Functions y Service Bus. Se mantiene salvo que el equipo decida lo contrario.
-
-**Por qué el change feed:** la partición por `zone_id` procesa los reportes de una zona en orden y de a uno por lease, lo que evita incidencias duplicadas sin bloqueos. Guardar y reaccionar es atómico.
+**Diferencia con `docs/global/PLAN.md`:** el plan usa Storage Queue + `report-processor` + `sweeper` y descarta Durable Functions. Se implementó Durable Functions + Service Bus; se mantiene salvo que el equipo decida lo contrario.
 
 ## 6. Reglas de dominio
 
-### 6.1 Incidente colectivo y estados
-- Se abre con **≥ 10 usuarios distintos** en la misma zona dentro de una ventana deslizante **< 24 h**. Varios reportes del mismo usuario cuentan uno. Los reportes posteriores se enlazan al incidente abierto.
-- Estados: `REGISTRADA → EN_REVISION → EN_ATENCION → SOLUCIONADA → CERRADA`, con reapertura `SOLUCIONADA → EN_REVISION`. Etiquetas de la interfaz (`contracts/enums.json`): Registrada, En revisión, **Siendo atendida**, Solucionada, Cerrada.
-- Tipos de incidencia: `COLECTIVA`, `INFRAESTRUCTURA`, `PREVENTIVA`, `ESTRUCTURAL`.
-- `detected_by`: `ANTENA`, `USUARIOS` o `AMBOS`. `detection_lag_s = first_report_at − first_anomaly_at` (positivo = la antena detectó antes).
-
-### 6.2 Prioridad
-`score = 40·U + 25·Z + 20·A + 10·D + 5·R`
-- **U** = `min(1, log10(usuarios)/4)` · **Z** = tipo de zona (SALUD/CRITICA 1.0, EDUCATIVA 0.8, INDUSTRIAL 0.7, COMERCIAL 0.5, RESIDENCIAL 0.4; +0.2 si la IA detecta un sitio crítico) · **D** = `min(1, horas/6)` · **R** = `min(1, incidentes de la antena en 30 días / 5)`.
-- **A** (evidencia de antena): FALLA con `new_state` INHABILITADA 1.0, FALLA con CAIDA 0.7, SATURACION 0.5, ninguna 0 ("verificar en campo"). **PREVENTIVA no confirma.** DEGRADACION: por definir con el equipo.
-- Niveles: **CRÍTICA ≥ 75 · ALTA 50–74 · MEDIA 25–49 · BAJA < 25**. Los pesos vivirán en `/config`.
-- Las incidencias PREVENTIVA y ESTRUCTURAL **no notifican a usuarios**, porque no tienen usuarios asociados.
-
-### 6.3 Notificaciones
-Tres etapas, una por usuario y etapa. Clave de idempotencia: `incidente|usuario|etapa|ciclo`. Los mensajes de la cola no llevan datos de contacto; se leen del reporte solo al enviar. SMS simulado.
+- **Incidencia colectiva:** ≥ `USERS_THRESHOLD` (10) usuarios distintos en la misma zona en `WINDOW_HOURS` (24) h. ID `INC-<zona>-<epoch>`.
+- **Estados:** `REGISTRADA → EN_REVISION → EN_ATENCION → SOLUCIONADA → CERRADA` (+ reapertura). Etiquetas: Registrada, En revisión, **Siendo atendida**, Solucionada, Cerrada.
+- **Tipos:** `COLECTIVA` (usuarios), `PREVENTIVA` y `ESTRUCTURAL` (eventos de AWS; ID `INC-<zona>-<TIPO>-<antena>-<epoch>`, no notifican a usuarios).
+- **Prioridad:** `score = 40·U + 25·Z + 20·A + 10·D + 5·R`. **A:** FALLA/PROLONGADA según `new_state` (INHABILITADA 1.0, CAIDA 0.7, SATURADA 0.5), SATURACION 0.5, DEGRADACION 0.3 (**propuesta, confirmar con el equipo**), PREVENTIVA 0. **R:** episodios de falla en 30 días (o `recurrence.episodes_30d` de un ESTRUCTURAL) / 5. Niveles: CRÍTICA ≥ 75 · ALTA ≥ 50 · MEDIA ≥ 25 · BAJA. El operador puede fijarla a mano.
+- **Notificaciones:** clave de idempotencia `incidente|usuario|etapa|ciclo`; la cola no lleva datos de contacto.
 
 ## 7. Modelo de datos (Cosmos DB, base `pulsored`)
 
 | Contenedor | Partición | `id` | Notas |
 |---|---|---|---|
-| `reports` | `/zone_id` | `report_id` | PII (`user_document`, `phone`, `email`) **solo aquí** |
-| `incidents` | `/zone_id` | `incident_id` | tipo, origen, prioridad y factores, `detected_by`, tiempos, `ai` |
-| `incident_users` | `/incident_id` | `user_key` | Conteo exacto de usuarios distintos |
-| `history` | `/entity_id` | `entity\|ts#seq` | Solo se agrega; actor SISTEMA / IA / OPERADOR / USUARIO |
-| `infra_events` | `/zone_id` | `event_id` | TTL 30 días; base de la proyección de antenas |
+| `reports` | `/zone_id` | `REP-…` | PII **solo aquí**; `user_key`, `category`, `corr_group`, `ai{category, urgency, critical_site, source}` |
+| `incidents` | `/zone_id` | `INC-…` | `incident_type`, `detected_by`, prioridad y factores, tiempos, `ai{summary, probable_cause, recommended_action}` |
+| `incident_users` | `/incident_id` | `user_key` | Conteo exacto |
+| `history` | `/entity_id` | `ts\|seq` | Solo se agrega |
+| `infra_events` | `/zone_id` | `event_id` | Payload del contrato + sobre; TTL 30 días |
 | `notifications` | `/incident_id` | `incidente\|usuario\|etapa\|ciclo` | Estado de entrega |
-| `zones` | `/id` | `zone_id` | Catálogo (`contracts/zones.json`) |
-| `leases-*` | — | — | Control del change feed |
-
-El documento y el teléfono nunca salen a GCP ni a las colas.
+| `zones` | `/id` | `zone_id` | Catálogo |
+| `leases` | `/id` | — | Change feed |
 
 ## 8. Picos, fallos y recuperación
 
 | Situación | Manejo |
 |---|---|
-| Pico de reportes | Functions escalan; el frontend reintenta con backoff y el mismo `idempotency_key`; Cosmos con reintentos ante `429` |
-| AWS reenvía un evento | `create_item` → `200 duplicate` |
-| Azure caído | AWS acumula en su outbox y reenvía (RF-AWS-12) |
-| GCP caído | `ai_enrich` cae a reglas; el `exporter` reintenta y manda a DLQ; `POST /api/ops/redrive` lo reprocesa |
-| ACS falla | Reintentos y DLQ; la idempotencia evita duplicados |
-| AWS apagado (Lab) | Sigo registrando, detectando y notificando; la consola muestra "infra desactualizada" |
+| Pico de reportes | `202` inmediato; change feed asíncrono; reintentos ante `429` de Cosmos; el portal reintenta con la misma `idempotency_key` |
+| AWS reenvía un evento | `200 duplicate` |
+| Azure caído | AWS acumula en su outbox y reenvía |
+| GCP caído | Clasificación y resumen por reglas; exportación a DLQ y `POST /api/ops/redrive` |
+| AWS apagado (Lab) | Se sigue registrando, detectando y notificando; `/config` usa caché o valores por defecto |
 
-## 9. Brechas entre el código y los contratos
+## 9. Lo que queda por hacer
 
-Lo que hay que adaptar en el código para conectar bien (orden de prioridad):
+1. **Desplegar** (`.\infra\deploy.ps1` + `.\infra\smoke_test.ps1`) y verificar free tier, respaldo continuo, ACS y los triggers reales.
+2. Completar en `.env` las URLs y claves de AWS y GCP cuando existan (§10) y ejecutar `.\infra\deploy.ps1 -SettingsOnly`.
+3. Confirmar con el equipo el peso de DEGRADACION y si P1 agrega `USERS_THRESHOLD`/`WINDOW_HOURS`/`CORRELATION_MODE` a su `/config`.
+4. Extras: mapa en la consola, reconciliación periódica, SignalR.
 
-1. **Zonas:** usar `contracts/zones.json` (`LIM-SURCO`, `ANT-LIM-001`). Mi `zone_id` acepta hasta 8 caracteres y mi `report_id` se parsea cortando por guiones; ambos fallan con los IDs reales.
-2. **Evento de AWS:** ruta `/events/infra`, header `X-API-Key`, sobre común, los 7 tipos y `new_state` para la evidencia. Hoy acepto 5 tipos en inglés y campos planos.
-3. **Categorías:** usar las de `enums.json`.
-4. **IA:** separar `classify-report` (por reporte) y `summarize-incident`, con los campos y timeouts de §4.
-5. **Exportación:** sobre común con `incident.upsert` y `report.upsert`; incluir reportes.
-6. **IDs:** adoptar `REP-…` e `INC-…`, sin depender de la zona dentro del ID.
-7. **`GET /config`, `/antennas`, `/predictions`** de AWS, con caché.
-8. **Incidencias PREVENTIVA y ESTRUCTURAL** desde sus eventos.
-9. **Modo de reportes relacionados `ZONA`** (cualquier tipo) por defecto.
-10. Resto de pendientes de §2: límite de tasa, dato de verificación, coordenadas → zona, estado de entrega en el historial, respaldo continuo.
+## 10. Variables globales (`.env`)
 
-## 10. Despliegue y restricciones de la cuenta
+`.env.example` (versionado) es la plantilla; `.env` (no versionado) tiene los valores reales. En local el backend lo lee al arrancar; en Azure lo sube `deploy.ps1` (las claves a Key Vault).
 
-Azure for Students: regiones permitidas `westus2`, `canadacentral`, `brazilsouth`, `chilecentral`, `westus`. Cosmos free tier con respaldo a serverless; SMS siempre simulado; correo real solo si ACS se puede crear por CLI.
+| Variable | Qué es | Quién la da |
+|---|---|---|
+| `AWS_API_BASE` | URL de API Gateway (`https://<id>.execute-api.us-east-1.amazonaws.com`) | P1 |
+| `AWS_API_KEY` | Clave `azure` de `pulsored/secrets.inbound` | P1 |
+| `AWS_CONFIG_PATH`, `AWS_ANTENNAS_PATH`, `AWS_PREDICTIONS_PATH` | Rutas (`/config`, `/antennas`, `/predictions`) | Contrato |
+| `AZURE_INBOUND_API_KEY` | Clave con la que AWS llama a `/api/events/infra` | Yo (la genera `deploy.ps1`) → P1 la guarda como `outbound.azure_api_key` |
+| `GCP_API_BASE` | URL de Cloud Run | P3 |
+| `GCP_API_KEY` | Clave que GCP asigna a Azure | P3 |
+| `GCP_INGEST_PATH`, `GCP_CLASSIFY_PATH`, `GCP_SUMMARIZE_PATH` | Rutas (`/ingest/incidents`, `/ai/classify-report`, `/ai/summarize-incident`) | Contrato |
+| `USERS_THRESHOLD`, `WINDOW_HOURS`, `CORRELATION_MODE`, `RATE_LIMIT_PER_HOUR`, tiempos | Reglas (por defecto; AWS `/config` manda si trae la clave) | Equipo |
 
-```powershell
-az login --use-device-code
-.\infra\deploy.ps1        # crea todo, publica backend y frontend
-.\infra\smoke_test.ps1
-.\infra\teardown.ps1 -Yes
-```
-`deploy.ps1` escribe `infra\outputs.local.json` (secretos; **no se versiona**). Riesgos no verificables hasta desplegar: free tier de Cosmos, automatización de ACS, referencias a Key Vault y los triggers reales de Cosmos, Service Bus y Durable.
+**Cambiar de simulado a real:** completar `AWS_API_BASE`/`AWS_API_KEY` o `GCP_API_BASE`/`GCP_API_KEY` en `.env` → `.\infra\deploy.ps1 -SettingsOnly`. La consola muestra en la cabecera si cada integración está conectada o simulada.
 
 ## 11. Qué necesito de los demás y qué doy
 
-| De quién | Qué | Para |
-|---|---|---|
-| **P1 (AWS)** | URL base de API Gateway y la clave `azure` | `GET /config`, `/antennas`, `/predictions` |
-| **P1 (AWS)** | Confirmar ruta `/events/infra`, `X-API-Key` y la URL base con o sin `/api` | `outbox-azure` |
-| **P3 (GCP)** | URL base de Cloud Run y la clave de Azure | `/ai/*` e `/ingest/incidents` |
-| **P3 (GCP)** | Quién hace la consola y desde qué fecha | RF-AZ-19 |
-| **Todos** | `contracts/enums.json` y `zones.json` fijados | Mismo idioma entre las tres nubes |
+| De quién | Qué |
+|---|---|
+| **P1 (AWS)** | `AWS_API_BASE` y la clave `azure` (`AWS_API_KEY`) |
+| **P3 (GCP)** | `GCP_API_BASE` y la clave de Azure (`GCP_API_KEY`) |
+| **Todos** | Mantener `contracts/` sincronizado (si cambia, copiar `zones.json`, `enums.json` y `events/*.json` a `backend/pulsored/data/` y `frontend/`) |
 
-**Yo les doy:** URL de la Function App, la `azure_api_key` para que AWS la guarde en Secrets Manager (por canal privado), el endpoint de lectura para la consola y el portal de usuario.
+**Yo les doy:** URL base `https://<app>.azurewebsites.net/api` y `AZURE_INBOUND_API_KEY` (de `infra\outputs.local.json`, por canal privado).
 
-## 12. Pruebas
+## 12. Pruebas y ejecución local
 
-Las 41 pruebas locales cubren: ventana de 24 h, 9 y 10 usuarios, dos zonas, idempotencia de reportes y eventos, transiciones inválidas, prioridad, PII fuera de GCP y de las colas, notificador idempotente, exportación sin PII, caída de IA → reglas, reapertura y escalamiento al operador.
 ```powershell
 cd backend
-.\.venv\Scripts\python -m pytest -q
-.\.venv\Scripts\python scripts\simulate_local.py
+.\.venv\Scripts\python -m pytest -q                 # 56 pruebas (contratos, reglas, ciclo de vida, HTTP)
+.\.venv\Scripts\python scripts\simulate_local.py    # demo de punta a punta en memoria
+.\.venv\Scripts\python scripts\dev_server.py        # portal + consola + API en http://localhost:8080 (sin Azure)
+.\.venv\Scripts\python scripts\aws_simulator.py --url http://localhost:8080 --key dev-aws-key --type FALLA --state CAIDA
 ```
-Tras adaptar los contratos hay que sumar pruebas con los esquemas de `contracts/events/*.json` (RNF-10).
+Las pruebas cubren, entre otras: ventana de 24 h, 9/10 usuarios, dos zonas, modo ZONA vs ZONA_Y_CATEGORIA, coordenadas → zona, límite de tasa, verificación de la consulta, idempotencia de reportes y eventos, los 7 tipos de evento, validación del sobre común, PREVENTIVA/ESTRUCTURAL, proyección de antenas, prioridad, PII fuera de GCP/colas/IA, contrato de IA con GCP simulado, notificador idempotente con estado en el historial, exportación con sobre común y `event_id` determinista, reapertura y escalamiento.

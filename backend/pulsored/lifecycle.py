@@ -86,15 +86,18 @@ def check_infra(a):
 
 
 def ai_enrich(a):
+    """Resumen, causa probable y acción recomendada (GCP /ai/summarize-incident; si falla, reglas)."""
     store = get_store()
     inc = store.get("incidents", a["incident_id"], a["zone_id"])
     reports = store.reports_for_incident(a["incident_id"], a["zone_id"])
-    out = ai.enrich(inc, reports, store.get_zone(a["zone_id"]))
-    inc["ai"] = {k: out.get(k) for k in ("summary", "critical_site", "urgency", "notification_text")}
+    out = ai.summarize_incident(inc, reports, store.get_zone(a["zone_id"]), priority.evidence(store, a["zone_id"]))
+    inc["ai"] = {k: out.get(k) for k in ("summary", "probable_cause", "recommended_action", "model_version",
+                                         "critical_site", "notification_text")}
     inc["ai_source"] = out["ai_source"]
+    inc["critical_site"] = bool(inc.get("critical_site")) or bool(out.get("critical_site"))
     inc["updated_at"] = clock.iso()
     store.upsert("incidents", inc)
-    store.add_history(inc["id"], inc["status"], inc["status"], "IA" if out["ai_source"] == "gemini" else "SISTEMA",
+    store.add_history(inc["id"], inc["status"], inc["status"], "IA" if out["ai_source"] == ai.SRC_AI else "SISTEMA",
                       "AI_ENRICHED", f'fuente={out["ai_source"]}')
     return {"ai_source": out["ai_source"]}
 

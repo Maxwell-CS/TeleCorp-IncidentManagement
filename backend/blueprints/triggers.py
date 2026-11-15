@@ -1,8 +1,6 @@
 """Triggers: change feed de Cosmos, colas de Service Bus y Durable Functions."""
 import json
 import logging
-from datetime import timedelta
-
 import azure.durable_functions as df
 import azure.functions as func
 
@@ -17,15 +15,15 @@ log = logging.getLogger("pulsored.triggers")
 DB = "pulsored"
 
 
-# ---------- change feed: reportes -> correlador ----------
+# ---------- change feed: reportes -> clasificación IA + correlador ----------
 @bp.cosmos_db_trigger(arg_name="docs", connection="COSMOS", database_name=DB, container_name="reports",
                       lease_container_name="leases", lease_container_prefix="corr-",
                       create_lease_container_if_not_exists=True)
 @bp.durable_client_input(client_name="client")
 async def correlator_fn(docs: func.DocumentList, client):
-    store = get_store()
+    store, queue = get_store(), get_queue()
     for d in docs:
-        new_incident = correlator.process_report(store, dict(d))
+        new_incident = correlator.process_report(store, dict(d), queue)
         if new_incident:
             try:
                 await client.start_new("incident_lifecycle", instance_id=new_incident["id"],
@@ -40,9 +38,9 @@ async def correlator_fn(docs: func.DocumentList, client):
                       create_lease_container_if_not_exists=True)
 @bp.durable_client_input(client_name="client")
 async def infra_linker(docs: func.DocumentList, client):
-    store = get_store()
+    store, queue = get_store(), get_queue()
     for d in docs:
-        for iid in infra.link_event(store, dict(d)):
+        for iid in infra.link_event(store, dict(d), queue):
             try:
                 await client.raise_event(iid, "operator_decision", "CONFIRMAR")
             except Exception as e:  # noqa: BLE001 - nadie esperando: no pasa nada
@@ -80,5 +78,6 @@ def notifier(msg: func.ServiceBusMessage):
 
 @bp.service_bus_queue_trigger(arg_name="msg", queue_name="analytics-export", connection="SB")
 def exporter(msg: func.ServiceBusMessage):
-    payload = json.loads(msg.get_body().decode())
-    export.send_to_gcp(payload)  # si lanza excepción -> reintento -> dead-letter
+    message = json.loads(msg.get_body().decode())   # sobre común incident.upsert / report.upsert
+    result = export.send_to_gcp(message)            # excepción -> reintento de Service Bus -> dead-letter
+    log.info("export %s %s -> %s", message.get("type"), message.get("event_id"), result)

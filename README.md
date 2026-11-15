@@ -6,7 +6,7 @@ Módulo de **cliente e incidencias** de PulsoRed (Red TeleCorp): recibe los repo
 
 | Nube | Contexto | Repo |
 |---|---|---|
-| **AWS** | Infraestructura y automatización: telemetría, eventos, Step Functions, predicciones, secretos y configuración global | `TeleCorp-InfraMonitoring` |
+| **AWS** | Infraestructura y automatización: telemetría, eventos, Step Functions, predicciones, configuración global | `TeleCorp-InfraMonitoring` |
 | **Azure** (este repo) | Cliente e incidencias: portal, reportes, correlación, priorización, ciclo de vida, notificaciones | `TeleCorp-IncidentManagement` |
 | **GCP** | Inteligencia y analítica: predicción, IA generativa (Gemini), histórico y dashboards | `TeleCorp-DataAnalytics` |
 
@@ -14,82 +14,97 @@ Documento pilar: [`docs/AZURE.md`](docs/AZURE.md). Contratos compartidos con AWS
 
 ## Qué hace Azure
 
-1. **Recibe reportes** (`POST /api/reports`): validación, idempotencia, `202`, guardado en Cosmos DB.
-2. **Detecta incidencias colectivas**: ≥ 10 usuarios distintos (`sha256(documento|teléfono)`) en la misma zona dentro de una ventana deslizante < 24 h. Los reportes posteriores se enlazan a la incidencia abierta.
-3. **Recibe eventos de AWS** (`POST /events/infra`, idempotente) y los correlaciona con los reportes: origen `ANTENA` / `USUARIOS` / `AMBOS` y tiempo de detección.
-4. **Prioriza** con un puntaje explicable `40U + 25Z + 20A + 10D + 5R` → CRÍTICA ≥ 75, ALTA ≥ 50, MEDIA ≥ 25, BAJA.
-5. **Orquesta el ciclo de vida** con Durable Functions: `REGISTRADA → EN_REVISION → EN_ATENCION → SOLUCIONADA → CERRADA`, con reapertura, escalamiento al operador y cierre automático.
-6. **Notifica** a quienes reportaron en 3 etapas (evaluando → incidencia identificada → restablecido), un mensaje por usuario y etapa. Correo con Azure Communication Services; SMS simulado.
-7. **Clasifica y resume con IA** (Gemini vía GCP) con degradación a reglas si GCP falla. Nunca se envían documento, teléfono ni correo.
-8. **Exporta a GCP** reportes e incidencias, sin datos personales.
-9. **Sirve a la consola de operación** (la construye P3) por API.
+1. **Recibe reportes** (`POST /api/reports`): validación, idempotencia, límite de tasa por usuario, zona declarada o calculada desde las coordenadas, `202`.
+2. **Clasifica cada reporte con IA** (Gemini vía GCP, `/ai/classify-report`) después de guardarlo; si GCP no responde, usa reglas.
+3. **Detecta incidencias colectivas**: ≥ 10 usuarios distintos en la misma zona dentro de 24 h (cualquier categoría; modo por categoría configurable).
+4. **Recibe eventos de AWS** (`POST /api/events/infra`, sobre común `antenna.event`, 7 tipos) y los correlaciona: evidencia de antena, origen `ANTENA`/`USUARIOS`/`AMBOS`, tiempo de detección; las alertas PREVENTIVA y ESTRUCTURAL crean su propia incidencia.
+5. **Prioriza** con un puntaje explicable `40U + 25Z + 20A + 10D + 5R` → CRÍTICA, ALTA, MEDIA, BAJA (el operador puede ajustarla).
+6. **Orquesta el ciclo de vida** con Durable Functions: Registrada → En revisión → Siendo atendida → Solucionada → Cerrada, con reapertura, escalamiento al operador y cierre automático.
+7. **Notifica** a quienes reportaron en 3 etapas (evaluando → incidencia identificada → restablecido), un mensaje por usuario y etapa, con el estado de entrega en el historial. Correo con Azure Communication Services; SMS simulado.
+8. **Resume con IA** cada incidencia (`/ai/summarize-incident`): resumen, causa probable y acción recomendada.
+9. **Exporta a GCP** reportes e incidencias (`incident.upsert`, `report.upsert`) sin datos personales.
+10. **Lee la configuración global de AWS** (`GET /config`) con caché y valores por defecto.
+11. **Portal de usuario** y **consola de operación** (bandeja, filtros, detalle, antenas, riesgos predictivos, acciones).
 
 ## APIs: qué recibe y qué envía Azure
 
-### Recibe (APIs que Azure expone)
+### Recibe (prefijo `/api`)
 | Quién llama | Ruta | Autenticación | Contenido |
 |---|---|---|---|
-| Usuario | `POST /api/reports` | Pública (esquema + tope de tamaño) | Reporte |
-| Usuario | `GET /api/reports/{id}` | Código del reporte | Estado e historial, sin datos personales |
-| **AWS** | `POST /events/infra` | `X-API-Key` | Sobre común `antenna.event` con 7 tipos: FALLA, SATURACION, DEGRADACION, RECUPERACION, PREVENTIVA, ESTRUCTURAL, PROLONGADA |
-| Operador / consola | `GET/PATCH /api/incidents…`, `PATCH /api/reports/{id}` | `x-operator-token` | Gestión |
-| Operador | `GET /api/infra/events`, `POST /api/ops/redrive` | `x-operator-token` | Operación |
+| Usuario | `POST /api/reports` | Pública (esquema, tope de tamaño, límite de tasa) | Reporte |
+| Usuario | `GET /api/reports/{id}?verify=1234` | Código + últimos 4 dígitos del celular | Estado e historial, sin datos personales |
+| Portal | `GET /api/zones`, `GET /api/catalog` | Pública | Zonas y categorías del contrato |
+| **AWS** | `POST /api/events/infra` | `X-API-Key` (`AZURE_INBOUND_API_KEY`) | Sobre común `antenna.event` |
+| Consola | `GET /api/incidents`, `GET/PATCH /api/incidents/{id}`, `PATCH /api/reports/{id}` | `x-operator-token` | Gestión |
+| Consola | `GET /api/antennas`, `GET /api/predictions`, `GET /api/infra/events`, `GET /api/settings`, `POST /api/ops/redrive` | `x-operator-token` | Operación |
 
-### Envía
-| Destino | Llamada | Contenido |
+### Envía (URLs en `.env`)
+| Destino | Llamada | Contenido | Si falla |
+|---|---|---|---|
+| **GCP** | `POST {GCP_API_BASE}/ai/classify-report` | Texto del reporte sin datos personales | Reglas |
+| **GCP** | `POST {GCP_API_BASE}/ai/summarize-incident` | Datos de la incidencia | Reglas |
+| **GCP** | `POST {GCP_API_BASE}/ingest/incidents` | `incident.upsert` y `report.upsert` | Reintento y DLQ |
+| **AWS** | `GET {AWS_API_BASE}/config` | Configuración global | Caché / valores por defecto |
+| **AWS** | `GET {AWS_API_BASE}/antennas`, `/predictions` | Para la consola | Proyección local |
+| Usuarios | ACS Email / SMS | 3 etapas | Reintento y DLQ |
+
+Todas las llamadas entre nubes usan `X-API-Key`, el sobre común de `contracts/events/envelope.schema.json` donde aplica, entrega al menos una vez y receptores idempotentes. Detalle en [`docs/AZURE.md`](docs/AZURE.md) §3 y §4.
+
+## Variables globales (`.env`)
+
+Las URLs y claves de los otros módulos están en un solo archivo:
+
+```powershell
+copy .env.example .env      # y completa los valores
+```
+
+| Variable | Qué es | Quién la da |
 |---|---|---|
-| **GCP** | `POST /ai/classify-report` | Texto del reporte sin datos personales → categoría, urgencia, sitio crítico (timeout 4 s; si falla, reglas) |
-| **GCP** | `POST /ai/summarize-incident` | Datos de la incidencia → resumen, causa probable, acción (timeout 8 s) |
-| **GCP** | `POST /ingest/incidents` | `incident.upsert` y `report.upsert` en cada cambio, con `user_key` hash |
-| **AWS** | `GET /config` | Configuración global, con caché y valores por defecto |
-| **AWS** | `GET /antennas`, `GET /predictions` | Para la consola y la reconciliación (no es ruta crítica) |
-| Usuarios | ACS Email (real) y SMS (simulado) | 3 etapas de notificación |
+| `AWS_API_BASE`, `AWS_API_KEY` | URL de API Gateway y clave `azure` | P1 (AWS) |
+| `GCP_API_BASE`, `GCP_API_KEY` | URL de Cloud Run y clave de Azure | P3 (GCP) |
+| `AZURE_INBOUND_API_KEY` | Clave con la que AWS llama a `/api/events/infra` | La genera `deploy.ps1`; se entrega a P1 |
+| `*_PATH`, `*_TIMEOUT_S` | Rutas y tiempos de espera de cada API | Contrato |
+| `USERS_THRESHOLD`, `WINDOW_HOURS`, `CORRELATION_MODE`, `RATE_LIMIT_PER_HOUR`, … | Reglas por defecto (AWS `/config` manda si trae la clave) | Equipo |
 
-Todas las llamadas entre nubes usan el sobre común (`contracts/events/envelope.schema.json`), entrega al menos una vez y receptores idempotentes por `event_id`. Detalle y ejemplos en [`docs/AZURE.md`](docs/AZURE.md) §3 y §4.
+Si una URL base está vacía, esa integración funciona en **modo simulado** (reglas, mock o proyección local). Cuando AWS o GCP estén listos: completa `.env` y ejecuta `.\infra\deploy.ps1 -SettingsOnly`. `.env` **no se versiona**.
 
 ## Estado
 
-Backend, frontend y scripts de despliegue **escritos y probados en local (41 pruebas); nada desplegado todavía**. Falta adaptar el código a los contratos compartidos (zonas `LIM-*`, sobre común, 7 tipos de evento, categorías, endpoints de IA): lista en [`docs/AZURE.md`](docs/AZURE.md) §9. Requisitos RF-AZ-01…33 y su estado en §2 (15 cumplen, 13 parciales, 5 faltan).
+Código **adaptado a los contratos compartidos y probado en local** (56 pruebas, simulación de punta a punta, servidor de desarrollo). **Nada desplegado todavía.** Requisitos RF-AZ-01…33: 28 cumplen, 4 parciales, 1 extra pendiente (detalle en [`docs/AZURE.md`](docs/AZURE.md) §2).
 
 ## Estructura
 
 ```
 backend/     Azure Functions (Python 3.12, modelo v2) + Durable Functions
   pulsored/    lógica de negocio (sin dependencias de Azure; testeable)
+    data/        copia de contracts/ (zonas, enums, esquemas de eventos)
   blueprints/  http_api.py (REST) y triggers.py (change feed, Service Bus, Durable)
-  tests/       41 pruebas
-  scripts/     simulate_local.py · aws_simulator.py · load_test.py · seed_zones.py
-frontend/    portal de usuario (index.html) y consola de operación base (consola.html), sin build
+  tests/       56 pruebas
+  scripts/     dev_server.py · simulate_local.py · aws_simulator.py · load_test.py · seed_zones.py
+frontend/    portal de usuario (index.html) y consola de operación (consola.html), sin build
 infra/       deploy.ps1 · smoke_test.ps1 · teardown.ps1
 contracts/   contratos compartidos con AWS y GCP (copia de TeleCorp-InfraMonitoring)
 docs/        AZURE.md (pilar) · AZURE.drawio · global/ (requisitos, plan y GCP del equipo)
+.env.example plantilla de variables globales
 ```
 
 ## Probar en local (sin Azure)
 ```powershell
 cd backend
 py -3.12 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt pytest
-.\.venv\Scripts\python -m pytest -q                # 41 pruebas
-.\.venv\Scripts\python scripts\simulate_local.py   # 10 reportes -> incidencia -> orquestación -> correos -> export
+.\.venv\Scripts\python -m pytest -q                # 56 pruebas
+.\.venv\Scripts\python scripts\simulate_local.py   # 10 reportes -> incidencia -> orquestación -> avisos -> export
+.\.venv\Scripts\python scripts\dev_server.py       # portal y consola en http://localhost:8080
 ```
 
 ## Desplegar en Azure
 ```powershell
 az login --use-device-code
-.\infra\deploy.ps1          # crea todo, publica backend y frontend (idempotente)
-.\infra\smoke_test.ps1
-.\infra\teardown.ps1 -Yes   # borra todo
+.\infra\deploy.ps1                 # crea todo, sube .env, publica backend y frontend (idempotente)
+.\infra\smoke_test.ps1             # prueba de humo con el contrato real
+.\infra\deploy.ps1 -SettingsOnly   # solo actualiza las variables del .env
+.\infra\teardown.ps1 -Yes          # borra todo
 ```
-`deploy.ps1` escribe `infra\outputs.local.json` (contiene secretos; **no se versiona**). Restricciones de la cuenta (Azure for Students): regiones `westus2`, `canadacentral`, `brazilsouth`, `chilecentral`, `westus`; Cosmos free tier con respaldo a serverless; SMS siempre simulado.
-
-## Configuración (app settings)
-| Variable | Para qué | Sin ella |
-|---|---|---|
-| `COSMOS`, `SB` | Conexión a Cosmos y Service Bus | Memoria local (solo desarrollo) |
-| `OPERATOR_TOKEN` | Header `x-operator-token` de la consola | Los endpoints de operador rechazan todo |
-| `ACS_CONNECTION_STRING`, `ACS_SENDER` | Correo real | Correo **simulado** |
-| `GCP_URL`, `GCP_KEY` | Endpoints de GCP | Exportación en modo **mock** |
-| `AI_URL` | Endpoint de IA (Gemini) | IA por **reglas** (`ai_source=rules`) |
-| `USERS_THRESHOLD` (10), `OPERATOR_WAIT_MIN` (120), `RECOVERY_POLL_MIN` (5), `COOLDOWN_MIN` (30) | Umbrales y tiempos | Valores entre paréntesis |
+`deploy.ps1` escribe `infra\outputs.local.json` (contiene secretos; **no se versiona**) con la URL base para AWS y `azureInboundApiKey`. Restricciones de la cuenta (Azure for Students): regiones `westus2`, `canadacentral`, `brazilsouth`, `chilecentral`, `westus`; Cosmos free tier con respaldo a serverless; SMS siempre simulado.
 
 > `docs/` es interno y se borra antes de entregar (el enunciado anula a quien entregue un informe).
