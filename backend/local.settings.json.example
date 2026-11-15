@@ -1,0 +1,21 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "COSMOS": "AccountEndpoint=https://localhost:8081/;AccountKey=<clave-del-emulador>;",
+    "COSMOS_DB": "pulsored",
+    "SB": "<service-bus-connection-string>",
+    "OPERATOR_TOKEN": "dev-operator-token",
+    "ACS_CONNECTION_STRING": "",
+    "ACS_SENDER": "",
+    "GCP_URL": "",
+    "GCP_KEY": "",
+    "AI_URL": "",
+    "USERS_THRESHOLD": "10",
+    "OPERATOR_WAIT_MIN": "120",
+    "RECOVERY_POLL_MIN": "5",
+    "COOLDOWN_MIN": "30"
+  },
+  "Host": { "CORS": "*" }
+}

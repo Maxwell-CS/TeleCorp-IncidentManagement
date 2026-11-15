@@ -1,0 +1,14 @@
+[
+  {"id": "Z01", "name": "Miraflores",        "type": "COMERCIAL",   "lat": -12.1219, "lng": -77.0297, "critical_sites": ["Clínica Angloamericana"]},
+  {"id": "Z02", "name": "San Isidro",        "type": "COMERCIAL",   "lat": -12.0977, "lng": -77.0365, "critical_sites": []},
+  {"id": "Z03", "name": "Lima Cercado",      "type": "COMERCIAL",   "lat": -12.0464, "lng": -77.0428, "critical_sites": ["Hospital Loayza"]},
+  {"id": "Z04", "name": "San Borja",         "type": "RESIDENCIAL", "lat": -12.1088, "lng": -76.9998, "critical_sites": []},
+  {"id": "Z05", "name": "Surco",             "type": "RESIDENCIAL", "lat": -12.1450, "lng": -76.9930, "critical_sites": []},
+  {"id": "Z06", "name": "La Molina",         "type": "EDUCATIVA",   "lat": -12.0870, "lng": -76.9050, "critical_sites": ["Universidad Agraria"]},
+  {"id": "Z07", "name": "San Miguel",        "type": "RESIDENCIAL", "lat": -12.0770, "lng": -77.0870, "critical_sites": []},
+  {"id": "Z08", "name": "Callao",            "type": "INDUSTRIAL",  "lat": -12.0566, "lng": -77.1181, "critical_sites": ["Puerto del Callao"]},
+  {"id": "Z09", "name": "Ate",               "type": "INDUSTRIAL",  "lat": -12.0260, "lng": -76.9180, "critical_sites": []},
+  {"id": "Z10", "name": "San Juan de Lurigancho", "type": "RESIDENCIAL", "lat": -11.9900, "lng": -77.0080, "critical_sites": []},
+  {"id": "Z11", "name": "Jesús María",       "type": "SALUD",       "lat": -12.0710, "lng": -77.0500, "critical_sites": ["Hospital Rebagliati"]},
+  {"id": "Z12", "name": "Comas",             "type": "CRITICA",     "lat": -11.9370, "lng": -77.0500, "critical_sites": ["Hospital Sergio Bernales", "Comisaría de Comas"]}
+]
