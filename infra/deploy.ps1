@@ -210,6 +210,9 @@ Az functionapp config appsettings set -n $n.func -g $RG --settings @settings -o 
 
 if (-not $SkipBackend) {
   Step "9. Publicar backend"
+  if (-not (Get-Command func -ErrorAction SilentlyContinue)) {   # instalado pero la terminal no tiene el PATH nuevo
+    $env:Path += ';C:\Program Files\Microsoft\Azure Functions Core Tools'
+  }
   Push-Location (Join-Path $root 'backend')
   try {
     $ErrorActionPreference = 'Continue'
