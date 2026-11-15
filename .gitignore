@@ -10,3 +10,4 @@ infra/state.json
 *.local.*
 node_modules/
 TeleCorp-InfraMonitoring/
+TeleCorp-DataAnalytics/
