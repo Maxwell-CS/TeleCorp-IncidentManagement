@@ -16,6 +16,7 @@ DB = "pulsored"
 
 
 # ---------- change feed: reportes -> clasificación IA + correlador ----------
+@bp.retry(strategy="exponential_backoff", max_retry_count="5", minimum_interval="00:00:05", maximum_interval="00:01:00")
 @bp.cosmos_db_trigger(arg_name="docs", connection="COSMOS", database_name=DB, container_name="reports",
                       lease_container_name="leases", lease_container_prefix="corr-",
                       create_lease_container_if_not_exists=True)
@@ -33,6 +34,7 @@ async def correlator_fn(docs: func.DocumentList, client):
 
 
 # ---------- change feed: eventos de infraestructura -> infra-linker ----------
+@bp.retry(strategy="exponential_backoff", max_retry_count="5", minimum_interval="00:00:05", maximum_interval="00:01:00")
 @bp.cosmos_db_trigger(arg_name="docs", connection="COSMOS", database_name=DB, container_name="infra_events",
                       lease_container_name="leases", lease_container_prefix="infra-",
                       create_lease_container_if_not_exists=True)

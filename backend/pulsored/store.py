@@ -30,6 +30,9 @@ ZONES = domain.ZONES   # catálogo único (contracts/zones.json)
 
 
 def clean(d):
+    """Quita los campos de sistema de Cosmos. Las consultas `SELECT VALUE COUNT(1)` devuelven escalares: se dejan igual."""
+    if not isinstance(d, dict):
+        return d
     return {k: v for k, v in d.items() if k not in _SYS}
 
 

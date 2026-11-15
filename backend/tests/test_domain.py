@@ -73,3 +73,21 @@ def test_nearest_zone_and_critical_sites():
 def test_correlation_group_modes():
     assert domain.correlation_group("LLAMADAS", "ZONA") == "ZONA"
     assert domain.correlation_group("LLAMADAS", "ZONA_Y_CATEGORIA") == "VOZ"
+
+
+def test_cosmos_clean_handles_scalar_query_results():
+    """SELECT VALUE COUNT(1) en Cosmos devuelve enteros, no documentos (falló en el primer despliegue)."""
+    from pulsored.store import CosmosStore, clean
+
+    assert clean(7) == 7
+    assert clean({"id": "x", "_rid": "r", "_etag": "e"}) == {"id": "x"}
+
+    class FakeContainer:
+        def query_items(self, sql, parameters=None, **kw):
+            return [3] if "COUNT" in sql else [{"id": "a", "_ts": 1}]
+
+    s = CosmosStore.__new__(CosmosStore)
+    s._c = {"reports": FakeContainer(), "incident_users": FakeContainer(), "incidents": FakeContainer()}
+    assert s.count_reports_by_user_since("u", "2026-01-01") == 3
+    assert s.count_incident_users("INC-x") == 3
+    assert s.count_incidents_since("LIM-SURCO", "2026-01-01") == 3

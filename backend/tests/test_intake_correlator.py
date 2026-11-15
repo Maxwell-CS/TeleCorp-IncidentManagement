@@ -150,3 +150,15 @@ def test_report_status_transitions(env):
     assert reports.change_report_status(env.store, rid, "SOLUCIONADA", "x")[0] == 409
     assert any(h["action"] == "TRANSITION_REJECTED" for h in env.store.list_history(rid))
     assert reports.change_report_status(env.store, rid, "EN_REVISION", "ok")[0] == 200
+
+
+def test_orphan_incident_is_resumed(env):
+    """Si el correlador falló tras crear la incidencia (sin pedir la orquestación), el siguiente reporte la retoma."""
+    inc = send_reports(env.store, 10)[0]
+    doc = env.store.get("incidents", inc["id"], ZONE)
+    assert doc["lifecycle_requested"] is True
+    doc["lifecycle_requested"] = False                        # simula el fallo antes de arrancar la orquestación
+    env.store.upsert("incidents", doc)
+    resumed = send_reports(env.store, 1, start=10)
+    assert len(resumed) == 1 and resumed[0]["id"] == inc["id"] and resumed[0]["users_affected"] == 11
+    assert send_reports(env.store, 1, start=11) == []          # ya pedida: no se vuelve a arrancar

@@ -50,8 +50,17 @@ def _link(store, inc, reports, queue=None):
     return inc
 
 
+def _request_lifecycle(store, inc):
+    """Marca que la orquestación fue pedida y devuelve la incidencia para que el trigger la arranque.
+    Si una ejecución anterior falló después de crear la incidencia, la próxima la retoma (no queda huérfana)."""
+    inc = store.get("incidents", inc["id"], inc["zone_id"]) or inc
+    inc["lifecycle_requested"] = True
+    store.upsert("incidents", inc)
+    return inc
+
+
 def process_report(store, r, queue=None):
-    """Procesa un reporte del change feed. Devuelve la incidencia NUEVA creada (o None)."""
+    """Procesa un reporte del change feed. Devuelve la incidencia cuya orquestación hay que arrancar (o None)."""
     if r.get("incident_id") or r.get("status") == "CERRADA" or not r.get("zone_id"):
         return None  # ya enlazado (también evita bucles por nuestros propios updates)
     r = classify(store, queue, r)
@@ -61,7 +70,7 @@ def process_report(store, r, queue=None):
     if open_inc:
         inc = _link(store, open_inc, [r], queue)
         priority.recompute(store, inc["id"], zone)
-        return None
+        return None if open_inc.get("lifecycle_requested") else _request_lifecycle(store, inc)
 
     since = clock.iso(clock.parse(r["created_at"]) - timedelta(hours=config.window_hours()))
     pending = store.reports_unlinked_since(zone, group, since)
@@ -82,11 +91,15 @@ def process_report(store, r, queue=None):
         "critical_site": False, "ai": None, "ai_source": None, "opened_at": now, "resolved_at": None,
         "closed_at": None, "updated_at": now,
     }
-    if not store.create("incidents", inc):
-        return None  # ya existía (reproceso del change feed): no reiniciar la orquestación
-    store.add_history(inc_id, None, "REGISTRADA", "SISTEMA", "INCIDENT_OPENED",
-                      f"{len(users)} usuarios distintos en {zone}" + ("" if group == "ZONA" else f"/{group}"))
+    if store.create("incidents", inc):
+        store.add_history(inc_id, None, "REGISTRADA", "SISTEMA", "INCIDENT_OPENED",
+                          f"{len(users)} usuarios distintos en {zone}" + ("" if group == "ZONA" else f"/{group}"))
+    else:
+        inc = store.get("incidents", inc_id, zone)   # reproceso tras un fallo: completar sin duplicar
+        if inc.get("lifecycle_requested"):
+            _link(store, inc, pending, queue)
+            return None
     _link(store, inc, pending, queue)
     priority.recompute(store, inc_id, zone)
     log.info("incidencia %s abierta con %d usuarios", inc_id, len(users))
-    return store.get("incidents", inc_id, zone)
+    return _request_lifecycle(store, inc)

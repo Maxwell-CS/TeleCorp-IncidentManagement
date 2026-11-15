@@ -55,6 +55,13 @@ function Setting($secretName, $value) {
   if ($NoKeyVaultRefs) { return $value }
   return "@Microsoft.KeyVault(SecretUri=https://$($n.kv).vault.azure.net/secrets/$secretName/)"
 }
+function Set-AppSettings($list) {
+  # Por archivo JSON: los paréntesis de @Microsoft.KeyVault(...) rompen az.cmd si van en la línea de comandos.
+  $items = foreach ($kv in $list) { if (-not "$kv".Contains('=')) { continue }; $k, $v = "$kv".Split('=', 2); if (-not $k.Trim()) { continue }; [ordered]@{ name = $k.Trim(); value = $v; slotSetting = $false } }
+  $file = Join-Path $env:TEMP "pulsored-settings-$Suffix.json"
+  [IO.File]::WriteAllText($file, (ConvertTo-Json @($items) -Depth 3), (New-Object Text.UTF8Encoding($false)))
+  try { Az functionapp config appsettings set -n $n.func -g $RG --settings "@$file" -o none } finally { Remove-Item $file -ErrorAction SilentlyContinue }
+}
 function External-Settings {
   # Variables del .env (URLs de AWS/GCP y reglas). Las claves van a Key Vault y la app las lee por referencia.
   if (-not $dotenv['AZURE_INBOUND_API_KEY']) { $dotenv['AZURE_INBOUND_API_KEY'] = $out.azureInboundApiKey }
@@ -64,7 +71,7 @@ function External-Settings {
     $v = $dotenv[$k]
     if ($secretVars.ContainsKey($k)) {
       if (-not $v) { continue }
-      Az keyvault secret set --vault-name $n.kv -n $secretVars[$k] --value $v -o none
+      Az keyvault secret set --vault-name $n.kv -n $secretVars[$k] --value $v -o none | Out-Null
       $list += "$k=$(Setting $secretVars[$k] $v)"
     } elseif ($v -ne '') { $list += "$k=$v" }
     else { $list += "$k=" }   # vacío = modo simulado
@@ -96,7 +103,7 @@ if ($SettingsOnly) {
   Step "Solo variables del .env -> app settings"
   if (-not $out.azureInboundApiKey) { throw 'No hay despliegue previo (infra\outputs.local.json). Ejecuta primero .\infra\deploy.ps1' }
   $ext = External-Settings
-  Az functionapp config appsettings set -n $n.func -g $RG --settings @ext -o none
+  Set-AppSettings $ext
   Write-Host "Listo: $($ext.Count) variables actualizadas en $($n.func)." -ForegroundColor Green
   exit 0
 }
@@ -206,7 +213,7 @@ $settings = @(
 )
 $settings += External-Settings
 if ($acsConn) { $settings += "ACS_CONNECTION_STRING=$(Setting 'acs-connection' $acsConn)"; $settings += "ACS_SENDER=$acsSender" }
-Az functionapp config appsettings set -n $n.func -g $RG --settings @settings -o none
+Set-AppSettings $settings
 
 if (-not $SkipBackend) {
   Step "9. Publicar backend"
@@ -230,7 +237,7 @@ if (-not $SkipFrontend) {
   $tmp = Join-Path $env:TEMP "pulsored-web-$Suffix"
   if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
   Copy-Item (Join-Path $root 'frontend') $tmp -Recurse
-  @{ apiBase = "https://$funcHost" } | ConvertTo-Json | Set-Content (Join-Path $tmp 'config.json') -Encoding utf8
+  [IO.File]::WriteAllText((Join-Path $tmp 'config.json'), (@{ apiBase = "https://$funcHost" } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
   $tok = (Az staticwebapp secrets list -n $n.swa -g $RG --query properties.apiKey -o tsv).Trim()
   $ErrorActionPreference = 'Continue'
   & swa deploy $tmp --deployment-token $tok --env production
