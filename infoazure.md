@@ -1,7 +1,7 @@
 # PulsoRed — Información del despliegue en Azure
 
 > Estado al 2026-11-15: **desplegado y funcionando** en la suscripción personal (prueba gratuita, límite de gasto activado), región `westus2`.
-> Este archivo **no contiene secretos**. Las claves están en `infra\outputs.local.json` (no se versiona) y en Key Vault.
+> Este archivo incluye el **token de operador** para que se pueda probar la consola. Las claves entre nubes (AWS, GCP y la de entrada de AWS) **no** están aquí: viven en `.env` (no se versiona) y en Key Vault.
 
 ## Links
 
@@ -13,7 +13,21 @@
 | **URL base de la API** | https://pulsored-func-pr8685.azurewebsites.net/api |
 | **Eventos de AWS** | `POST https://pulsored-func-pr8685.azurewebsites.net/api/events/infra` (header `X-API-Key`) |
 
-La consola pide un **token de operador**: valor `operatorToken` de `infra\outputs.local.json`.
+### Token de operador (para probar)
+
+La consola y los endpoints de operación piden este token (header `x-operator-token`):
+
+```
+rsdNAtJzgpn2vWX1IL0u6i49hEyPFjfDGwlZSkMm
+```
+
+Prueba rápida:
+
+```bash
+curl -H "x-operator-token: rsdNAtJzgpn2vWX1IL0u6i49hEyPFjfDGwlZSkMm" https://pulsored-func-pr8685.azurewebsites.net/api/incidents
+```
+
+> Se publica a propósito para que el jurado y el equipo puedan probar durante la hackatón. Después del evento se cambia.
 
 ## Recursos creados (grupo `rg-pulsored`)
 

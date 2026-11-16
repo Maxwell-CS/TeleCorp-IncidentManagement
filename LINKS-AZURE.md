@@ -54,6 +54,8 @@ Respuesta: `202` nuevo · `200 duplicate` · `400` inválido · `401` clave inco
 
 ### Consola de operación (header `x-operator-token`)
 
+Token para probar: está en [`infoazure.md`](infoazure.md#token-de-operador-para-probar).
+
 | Método | URL | Para qué |
 |---|---|---|
 | GET | https://pulsored-func-pr8685.azurewebsites.net/api/incidents | Incidencias abiertas, por prioridad. Filtros: `zone_id`, `incident_type`, `priority_level`, `status`, `include_closed=1` |
