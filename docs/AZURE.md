@@ -122,7 +122,7 @@ Respuestas: `202 {"status":"accepted"}` · `200 {"status":"duplicate"}` · `400`
 |---|---|---|---|
 | **GCP** | `POST {GCP_API_BASE}{GCP_CLASSIFY_PATH}` (`/ai/classify-report`), timeout 4 s | `report_id`, texto sin datos personales, categoría declarada, tipo de zona | `503`/timeout → reglas (`source=reglas`) |
 | **GCP** | `POST {GCP_API_BASE}{GCP_SUMMARIZE_PATH}` (`/ai/summarize-incident`), timeout 8 s | Zona, usuarios, evidencia de antenas, hasta 10 textos | Resumen por reglas |
-| **GCP** | `POST {GCP_API_BASE}{GCP_INGEST_PATH}` (`/ingest/incidents`) | Sobre `incident.upsert` / `report.upsert` + `Idempotency-Key` | Reintento de Service Bus → DLQ; 4xx se registra y no se reintenta |
+| **GCP** | `POST {GCP_API_BASE}{GCP_INGEST_PATH}` (`/ingest/incidents`) | Sobre `incident.upsert` / `report.upsert` + `Idempotency-Key` | Reintento de Service Bus → DLQ (también 401/403 de clave); otros 4xx se registran y no se reintentan |
 | **AWS** | `GET {AWS_API_BASE}{AWS_CONFIG_PATH}` (`/config`) | Configuración global | Caché y valores por defecto |
 | **AWS** | `GET {AWS_API_BASE}/antennas`, `/predictions` | Para la consola | Proyección local |
 | Usuarios | ACS Email (real) y SMS (simulado) | 3 etapas | Reintentos y DLQ |
@@ -204,7 +204,7 @@ Región `westus2`.
 | `AWS_API_KEY` | Clave `azure` de `pulsored/secrets.inbound` | P1 |
 | `AWS_CONFIG_PATH`, `AWS_ANTENNAS_PATH`, `AWS_PREDICTIONS_PATH` | Rutas (`/config`, `/antennas`, `/predictions`) | Contrato |
 | `AZURE_INBOUND_API_KEY` | Clave con la que AWS llama a `/api/events/infra` | Yo (la genera `deploy.ps1`) → P1 la guarda como `outbound.azure_api_key` |
-| `GCP_API_BASE` | URL de Cloud Run | P3 |
+| `GCP_API_BASE` | URL del API Gateway: `https://telecorp-gateway-1gcgm860.uc.gateway.dev/v1` | P3 |
 | `GCP_API_KEY` | Clave que GCP asigna a Azure | P3 |
 | `GCP_INGEST_PATH`, `GCP_CLASSIFY_PATH`, `GCP_SUMMARIZE_PATH` | Rutas (`/ingest/incidents`, `/ai/classify-report`, `/ai/summarize-incident`) | Contrato |
 | `USERS_THRESHOLD`, `WINDOW_HOURS`, `CORRELATION_MODE`, `RATE_LIMIT_PER_HOUR`, tiempos | Reglas (por defecto; AWS `/config` manda si trae la clave) | Equipo |
@@ -216,7 +216,7 @@ Región `westus2`.
 | De quién | Qué |
 |---|---|
 | **P1 (AWS)** | `AWS_API_BASE` y la clave `azure` (`AWS_API_KEY`) |
-| **P3 (GCP)** | `GCP_API_BASE` y la clave de Azure (`GCP_API_KEY`) |
+| **P3 (GCP)** | ~~`GCP_API_BASE`~~ (recibida) · la API key de Azure (`GCP_API_KEY`) |
 | **Todos** | Mantener `contracts/` sincronizado (si cambia, copiar `zones.json`, `enums.json` y `events/*.json` a `backend/pulsored/data/` y `frontend/`) |
 
 **Yo les doy:** URL base `https://<app>.azurewebsites.net/api` y `AZURE_INBOUND_API_KEY` (de `infra\outputs.local.json`, por canal privado).

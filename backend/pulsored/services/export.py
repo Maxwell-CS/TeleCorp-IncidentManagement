@@ -69,7 +69,9 @@ def enqueue_report(queue, report):
 
 def send_to_gcp(message):
     """POST idempotente. Sin GCP_API_BASE -> modo mock (se registra y se da por entregado).
-    4xx distinto de 429 = error del contrato: se registra y NO se reintenta. 5xx/429/red -> excepción -> reintento -> DLQ."""
+    4xx distinto de 401/403/429 = error del contrato: se registra y NO se reintenta.
+    401/403 (falta o error de la API key del Gateway), 5xx, 429 y red -> excepción -> reintento -> DLQ
+    (no se pierde: tras corregir la clave, POST /api/ops/redrive los reenvía)."""
     base = config.env("GCP_API_BASE")
     if not base:
         log.info("[GCP mock] %s %s", message["type"], message["payload"].get("incident_id") or message["payload"].get("report_id"))
@@ -77,6 +79,8 @@ def send_to_gcp(message):
     r = requests.post(base.rstrip("/") + config.env("GCP_INGEST_PATH", "/ingest/incidents"), json=message,
                       timeout=float(config.env("GCP_TIMEOUT_S", "10")),
                       headers={"X-API-Key": config.env("GCP_API_KEY"), "Idempotency-Key": message["event_id"]})
+    if r.status_code in (401, 403):
+        raise RuntimeError(f"GCP {r.status_code}: revisar GCP_API_KEY ({r.text[:200]})")
     if 400 <= r.status_code < 500 and r.status_code != 429:
         log.error("GCP rechazó %s (%s): %s", message["event_id"], r.status_code, r.text[:300])
         return "rejected"

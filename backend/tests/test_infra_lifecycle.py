@@ -213,6 +213,29 @@ def test_export_envelope_has_no_pii(env):
     assert export.send_to_gcp(msg) == "mock"
 
 
+def test_export_auth_error_is_retried_not_dropped(env, monkeypatch):
+    """Sin API key válida el Gateway responde 401: el mensaje debe ir a reintento/DLQ, no descartarse."""
+    import pytest
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code, self.text = code, "x"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setenv("GCP_API_BASE", "https://gcp.test/v1")
+    msg = export.incident_message(incident(env))
+    for code in (401, 403):
+        monkeypatch.setattr(export.requests, "post", lambda *a, c=code, **k: Resp(c))
+        with pytest.raises(RuntimeError):
+            export.send_to_gcp(msg)
+    monkeypatch.setattr(export.requests, "post", lambda *a, **k: Resp(400))
+    assert export.send_to_gcp(msg) == "rejected"
+    monkeypatch.setattr(export.requests, "post", lambda *a, **k: Resp(200))
+    assert export.send_to_gcp(msg) == "sent"
+
+
 def test_gcp_down_falls_back_to_rules(env, monkeypatch):
     monkeypatch.setenv("GCP_API_BASE", "http://127.0.0.1:9")
     monkeypatch.setenv("GCP_API_KEY", "k")

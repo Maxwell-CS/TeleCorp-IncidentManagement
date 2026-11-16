@@ -83,7 +83,7 @@ copy .env.example .env      # y completa los valores
 | Variable | Qué es | Quién la da |
 |---|---|---|
 | `AWS_API_BASE`, `AWS_API_KEY` | URL de API Gateway y clave `azure` | P1 (AWS) |
-| `GCP_API_BASE`, `GCP_API_KEY` | URL de Cloud Run y clave de Azure | P3 (GCP) |
+| `GCP_API_BASE`, `GCP_API_KEY` | URL del API Gateway (`https://telecorp-gateway-1gcgm860.uc.gateway.dev/v1`, ya configurada) y la API key de Azure (pendiente) | P3 (GCP) |
 | `AZURE_INBOUND_API_KEY` | Clave con la que AWS llama a `/api/events/infra` | La genera `deploy.ps1`; se entrega a P1 |
 | `*_PATH`, `*_TIMEOUT_S` | Rutas y tiempos de espera de cada API | Contrato |
 | `USERS_THRESHOLD`, `WINDOW_HOURS`, `CORRELATION_MODE`, `RATE_LIMIT_PER_HOUR`, … | Reglas por defecto (AWS `/config` manda si trae la clave) | Equipo |

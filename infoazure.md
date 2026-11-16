@@ -42,7 +42,7 @@ La consola pide un **token de operador**: valor `operatorToken` de `infra\output
 |---|---|---|
 | AWS → Azure (eventos de antenas) | Listo para recibir | Entregar a P1 (por privado) la URL base y `azureInboundApiKey` de `infra\outputs.local.json` |
 | Azure → AWS (`/config`, `/antennas`, `/predictions`) | Simulado | Poner `AWS_API_BASE` y `AWS_API_KEY` en `.env` |
-| Azure → GCP (`/ai/classify-report`, `/ai/summarize-incident`, `/ingest/incidents`) | Simulado (reglas y mock) | Poner `GCP_API_BASE` (URL del API Gateway) y `GCP_API_KEY` en `.env` |
+| Azure → GCP (`/ai/classify-report`, `/ai/summarize-incident`, `/ingest/incidents`) | **Conectado al API Gateway real**; falta la API key (hoy responde `401`: IA por reglas y exportación guardada en la DLQ) | Poner `GCP_API_KEY` en `.env`, `deploy.ps1 -SettingsOnly` y luego `POST /api/ops/redrive` |
 | Correo (ACS) | **Real** | — |
 | SMS | Simulado | No disponible en la cuenta |
 
@@ -58,7 +58,9 @@ Después de editar `.env`:
 
 ## Para P3 (GCP)
 - Azure llama a `POST {GCP_API_BASE}/ai/classify-report`, `/ai/summarize-incident` y `/ingest/incidents` con el header `x-api-key`. Formato exacto en el `README.md` (sección "Clasificación con IA") y en `docs/global/GCP.md` §4.2.
-- Necesito de P3: la URL base (API Gateway) y la clave que le asigne a Azure.
+- URL base configurada: `https://telecorp-gateway-1gcgm860.uc.gateway.dev/v1` (rutas `/ingest/incidents`, `/ai/classify-report`, `/ai/summarize-incident`). `/ingest/classify-report` no existe en el Gateway (404) y Azure no la usa.
+- Verificado el 2026-11-15: Azure llega al Gateway y este responde `401 UNAUTHENTICATED` porque falta la clave. Los cuerpos coinciden con los modelos de `app/main.py` de GCP.
+- Falta de P3: la **API key** de Google Cloud para Azure (header `x-api-key`), por canal privado.
 
 ## Operación
 
