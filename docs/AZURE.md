@@ -216,7 +216,7 @@ Región `westus2`.
 | De quién | Qué |
 |---|---|
 | **P1 (AWS)** | `AWS_API_BASE` y la clave `azure` (`AWS_API_KEY`) |
-| **P3 (GCP)** | ~~`GCP_API_BASE`~~ (recibida) · la API key de Azure (`GCP_API_KEY`) |
+| **P3 (GCP)** | ~~`GCP_API_BASE`~~ y ~~`GCP_API_KEY`~~ (recibidas y conectadas) · activar Gemini real en Cloud Run |
 | **Todos** | Mantener `contracts/` sincronizado (si cambia, copiar `zones.json`, `enums.json` y `events/*.json` a `backend/pulsored/data/` y `frontend/`) |
 
 **Yo les doy:** URL base `https://<app>.azurewebsites.net/api` y `AZURE_INBOUND_API_KEY` (de `infra\outputs.local.json`, por canal privado).

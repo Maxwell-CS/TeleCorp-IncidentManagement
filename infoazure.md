@@ -42,7 +42,7 @@ La consola pide un **token de operador**: valor `operatorToken` de `infra\output
 |---|---|---|
 | AWS → Azure (eventos de antenas) | Listo para recibir | Entregar a P1 (por privado) la URL base y `azureInboundApiKey` de `infra\outputs.local.json` |
 | Azure → AWS (`/config`, `/antennas`, `/predictions`) | Simulado | Poner `AWS_API_BASE` y `AWS_API_KEY` en `.env` |
-| Azure → GCP (`/ai/classify-report`, `/ai/summarize-incident`, `/ingest/incidents`) | **Conectado al API Gateway real**; falta la API key (hoy responde `401`: IA por reglas y exportación guardada en la DLQ) | Poner `GCP_API_KEY` en `.env`, `deploy.ps1 -SettingsOnly` y luego `POST /api/ops/redrive` |
+| Azure → GCP (`/ai/classify-report`, `/ai/summarize-incident`, `/ingest/incidents`) | **Real** (API Gateway + API key en Key Vault). Verificado: clasificación `fuente=gemini`, resumen `ai_source=gemini`, exportación `sent`, DLQ vacía | — |
 | Correo (ACS) | **Real** | — |
 | SMS | Simulado | No disponible en la cuenta |
 
@@ -59,8 +59,10 @@ Después de editar `.env`:
 ## Para P3 (GCP)
 - Azure llama a `POST {GCP_API_BASE}/ai/classify-report`, `/ai/summarize-incident` y `/ingest/incidents` con el header `x-api-key`. Formato exacto en el `README.md` (sección "Clasificación con IA") y en `docs/global/GCP.md` §4.2.
 - URL base configurada: `https://telecorp-gateway-1gcgm860.uc.gateway.dev/v1` (rutas `/ingest/incidents`, `/ai/classify-report`, `/ai/summarize-incident`). `/ingest/classify-report` no existe en el Gateway (404) y Azure no la usa.
-- Verificado el 2026-11-15: Azure llega al Gateway y este responde `401 UNAUTHENTICATED` porque falta la clave. Los cuerpos coinciden con los modelos de `app/main.py` de GCP.
-- Falta de P3: la **API key** de Google Cloud para Azure (header `x-api-key`), por canal privado.
+- API key recibida y guardada en Key Vault (`gcp-api-key`); nunca en el repo.
+- Verificado el 2026-11-15 en la nube: un reporte declarado `OTRO` fue reclasificado por GCP como `SIN_SENAL`; la incidencia `INC-LIM-MIRAFLORES-1794789711` recibió resumen, causa y acción de GCP; las exportaciones a `/ingest/incidents` responden `sent`.
+- Aviso para P3: GCP responde `model_version = gemini-2.5-flash-hybrid`, que es su respaldo por reglas. Gemini real aún no está activo de su lado (`GCP_PROJECT_ID`/`GEMINI_API_KEY` en Cloud Run).
+- Si se cambia la clave: actualizar `.env`, `deploy.ps1 -SettingsOnly` y luego `az functionapp stop` + `start` (un simple restart puede dejar una instancia con la clave anterior).
 
 ## Operación
 
