@@ -11,3 +11,7 @@ infra/state.json
 node_modules/
 TeleCorp-InfraMonitoring/
 TeleCorp-DataAnalytics/
+
+diagrama/
+pedido/
+endpoints/
