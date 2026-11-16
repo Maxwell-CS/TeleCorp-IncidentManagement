@@ -53,8 +53,8 @@ async function submitReport(payload) {
   btn.disabled = false;
   if (r.status === 202 || r.status === 200) {
     store.clear();
-    show(res, 'ok', 'Reporte registrado. Tu código es ', h('b', { class: 'mono' }, r.data.report_id),
-      '. Guárdalo: lo necesitas junto con los últimos 4 dígitos de tu celular para consultar el estado.');
+    show(res, 'ok', h('b', {}, 'Reporte registrado.'), h('div', {}, 'Tu código es'), h('span', { class: 'code-box' }, r.data.report_id),
+      h('div', {}, 'Guárdalo: lo necesitas junto con los últimos 4 dígitos de tu celular para consultar el estado.'));
     $('#code').value = r.data.report_id;
     $('#verify').value = payload.phone.replace(/\D/g, '').slice(-4);
     $('#form').reset(); $('#when').value = now; location_ = null; $('#geomsg').textContent = '';
@@ -98,7 +98,7 @@ async function lookup() {
   if (r.status !== 200) { show(out, 'err', r.data.message || 'No se pudo consultar.'); return; }
   const d = r.data;
   out.replaceChildren(
-    h('p', {}, 'Estado: ', pill(d.status), '  ·  Zona ', d.zone_id, '  ·  Registrado ', fmt(d.created_at)),
+    h('div', { class: 'msg' }, h('div', { style: 'margin:0 0 6px' }, pill(d.status)), 'Zona ', h('b', {}, d.zone_id), ' · registrado el ', fmt(d.created_at)),
     d.incident ? h('p', { class: 'mut' }, 'Tu reporte forma parte de una incidencia colectiva en tu zona (', d.incident.incident_id, ').') : '',
     h('ol', { class: 'tl' }, d.history.map((x) => h('li', {}, h('b', {}, x.label || x.action), ' · ', fmt(x.ts),
       x.action === 'STATUS_CHANGED' ? ` · ${x.to}` : (x.note ? ' · ' + x.note : '')))),

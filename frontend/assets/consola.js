@@ -5,7 +5,8 @@ try { token = sessionStorage.getItem('pulsored.op'); } catch {}
 
 const call = (path, opts = {}) => api(path, { token, retries: 1, ...opts });
 function msg(el, cls, text) { el.replaceChildren(h('div', { class: 'msg ' + cls }, text)); }
-const table = (cols, rows) => h('table', {}, h('thead', {}, h('tr', {}, ...cols.map((t) => h('th', {}, t)))), h('tbody', {}, rows));
+const table = (cols, rows) => h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ...cols.map((t) => h('th', {}, t)))), h('tbody', {}, rows)));
+const chip = (on, text) => h('span', { class: 'chip' + (on ? ' on' : '') }, h('i', {}), text);
 
 async function enter() {
   token = $('#token').value.trim() || token;
@@ -19,8 +20,11 @@ async function enter() {
   const s = await call('/settings');
   if (s.status === 200) {
     const i = s.data.integrations || {};
-    $('#integrations').textContent = `Config: ${s.data.source}${s.data.config_version ? ' v' + s.data.config_version : ''} · umbral ${s.data.USERS_THRESHOLD} usuarios/${s.data.WINDOW_HOURS} h · modo ${s.data.CORRELATION_MODE}` +
-      ` · AWS ${i.aws ? 'conectado' : 'simulado'} · GCP ${i.gcp ? 'conectado' : 'simulado'} · correo ${i.email ? 'real' : 'simulado'} · SMS simulado`;
+    $('#integrations').replaceChildren(
+      chip(true, `Config ${s.data.source === 'aws' ? 'AWS' : 'local'}${s.data.config_version ? ' · v' + s.data.config_version : ''}`),
+      chip(true, `Umbral ${s.data.USERS_THRESHOLD} usuarios / ${s.data.WINDOW_HOURS} h · ${s.data.CORRELATION_MODE}`),
+      chip(i.aws, `AWS ${i.aws ? 'conectado' : 'simulado'}`), chip(i.gcp, `GCP ${i.gcp ? 'conectado' : 'simulado'}`),
+      chip(i.email, `Correo ${i.email ? 'real' : 'simulado'}`), chip(false, 'SMS simulado'));
   }
   refresh();
   clearInterval(timer); timer = setInterval(refresh, 15000);
@@ -40,7 +44,7 @@ async function refresh() {
   renderInfra(ev.data.items || []);
   renderAntennas(ants.data || {});
   renderPredictions(preds.data || {});
-  $('#upd').textContent = 'Actualizado ' + new Date().toLocaleTimeString();
+  $('#upd').textContent = 'Actualizado a las ' + new Date().toLocaleTimeString();
   if (selected) openIncident(selected, true);
 }
 
@@ -64,7 +68,7 @@ function renderInfra(items) {
 }
 
 function renderAntennas(d) {
-  $('#antsrc').textContent = d.source === 'aws' ? '(AWS en vivo)' : '(proyección local de eventos)';
+  $('#antsrc').textContent = d.source === 'aws' ? 'Fuente: AWS en vivo.' : 'Fuente: proyección local de eventos.';
   const items = (d.items || []).filter((a) => a.state && a.state !== 'NORMAL');
   const total = (d.items || []).length;
   $('#antennas').replaceChildren(
@@ -75,7 +79,7 @@ function renderAntennas(d) {
 }
 
 function renderPredictions(d) {
-  $('#predsrc').textContent = d.source === 'aws' ? '(AWS)' : '(alertas PREVENTIVA recibidas)';
+  $('#predsrc').textContent = d.source === 'aws' ? 'Fuente: AWS.' : 'Fuente: alertas PREVENTIVA recibidas.';
   const items = d.items || [];
   $('#predictions').replaceChildren(items.length
     ? table(['Antena', 'Prob.', 'Estado previsto', 'Horizonte', 'Vigente hasta'], items.slice(0, 15).map((p) => h('tr', {},
@@ -115,15 +119,15 @@ async function openIncident(id, silent) {
       ai.recommended_action ? h('div', {}, h('b', {}, 'Acción recomendada: '), ai.recommended_action) : '') : '',
     (d.antenna_evidence || []).length ? h('p', { class: 'mut' }, 'Evidencia actual: ', d.antenna_evidence.map((a) => `${a.antenna_id} ${a.state || a.event_type}`).join(', ')) : '',
     h('p', { class: 'mut mono' }, 'Factores: ', JSON.stringify(d.priority_factors || {})),
-    h('input', { id: 'note', placeholder: 'Nota para el historial (opcional)', maxlength: '300' }),
+    h('label', { for: 'note' }, 'Nota para el historial (opcional)'), h('input', { id: 'note', maxlength: '300' }),
     h('div', { class: 'actions' },
       ['REGISTRADA', 'EN_REVISION'].includes(d.status) ? [btn('Confirmar', { action: 'CONFIRMAR' }), btn('Descartar (falso positivo)', { action: 'DESCARTAR' }, 'bad')] : '',
       next.map((to) => btn('→ ' + to, { action: 'CAMBIAR_ESTADO', to })),
       prio, btn('Aplicar prioridad', { action: 'CAMBIAR_PRIORIDAD', get level() { return $('#prio').value; } })),
     h('div', { id: 'actmsg' }),
-    h('h2', { style: 'margin-top:16px' }, 'Línea de tiempo'),
+    h('h3', { style: 'margin-top:32px' }, 'Línea de tiempo'),
     h('ol', { class: 'tl' }, (d.history || []).slice().reverse().map((x) => h('li', {}, h('b', {}, x.action), ' · ', x.actor, ' · ', fmt(x.ts), x.from !== x.to ? ` · ${x.from ?? '∅'} → ${x.to}` : '', x.note ? ' · ' + x.note : ''))),
-    h('h2', { style: 'margin-top:16px' }, `Reportes vinculados (${(d.reports || []).length})`),
+    h('h3', { style: 'margin-top:24px' }, `Reportes vinculados (${(d.reports || []).length})`),
     h('ul', { class: 'mut' }, (d.reports || []).slice(0, 10).map((x) => h('li', {}, h('span', { class: 'mono' }, x.report_id), ' · ',
       CATEGORY_LABEL[x.category] || x.category, x.ai_urgency ? ` · urgencia ${x.ai_urgency}` : '', ' · ', x.description))),
   );

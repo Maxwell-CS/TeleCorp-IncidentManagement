@@ -4,43 +4,76 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PulsoRed · Reporta un problema de servicio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;700&display=swap">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-<header><h1>📡 PulsoRed</h1><nav><a href="/">Reportar</a><a href="/consola">Consola de operación</a></nav></header>
+<nav class="topnav"><div class="in">
+  <a class="brand" href="/"><span class="dot"></span>PulsoRed</a>
+  <div class="tabs">
+    <a class="tab active" href="/">Reportar</a>
+    <a class="tab" href="#consultar">Mi reporte</a>
+    <a class="tab hide-sm" href="/consola">Operación</a>
+  </div>
+</div></nav>
+
 <main>
-  <section class="card">
-    <h2>Reportar un problema</h2>
-    <form id="form" autocomplete="off">
-      <div class="row">
-        <div><label for="doc">Documento de identidad</label><input id="doc" required pattern="[A-Za-z0-9]{6,15}" maxlength="15"></div>
-        <div><label for="phone">Celular</label><input id="phone" required pattern="\+?[0-9]{7,15}" placeholder="+51999999999"></div>
-        <div><label for="email">Correo (para recibir avisos)</label><input id="email" type="email" maxlength="120"></div>
-      </div>
-      <div class="row">
-        <div><label for="zone">Zona</label><select id="zone" required></select>
-          <button type="button" id="geo" class="sec small">📍 Usar mi ubicación</button> <span id="geomsg" class="mut"></span></div>
-        <div><label for="category">Tipo de problema</label><select id="category" required></select></div>
-        <div><label for="when">¿Cuándo empezó?</label><input id="when" type="datetime-local" required></div>
-      </div>
-      <label for="desc">Descripción</label>
-      <textarea id="desc" required minlength="3" maxlength="1000" placeholder="Cuéntanos qué pasa (por ejemplo, si es cerca de un hospital o colegio)"></textarea>
-      <p class="mut">Tus datos personales solo se usan para avisarte del estado del servicio; no se comparten con otros sistemas.</p>
-      <div class="actions"><button id="send" type="submit">Enviar reporte</button></div>
-      <div id="result"></div>
-    </form>
+  <header class="hero">
+    <p class="eyebrow">Red TeleCorp · Lima</p>
+    <h1>¿Problemas con tu servicio? Cuéntanos y lo resolvemos.</h1>
+    <p class="lead">Si varias personas reportan lo mismo en tu zona, lo detectamos como una incidencia y te avisamos por correo en cada etapa.</p>
+    <div class="cta">
+      <a class="btn" href="#reportar">Reportar un problema</a>
+      <a class="btn sec" href="#consultar">Consultar mi reporte</a>
+    </div>
+  </header>
+
+  <section class="tiles" aria-label="Cómo funciona">
+    <div class="tile"><div class="ic">1</div><h3>Reporta en un minuto</h3><p>Elige tu zona o usa tu ubicación y describe qué pasa.</p></div>
+    <div class="tile"><div class="ic">2</div><h3>Detección colectiva</h3><p>Cruzamos tu reporte con el estado de las antenas y los reportes de tus vecinos.</p></div>
+    <div class="tile"><div class="ic">3</div><h3>Te mantenemos al tanto</h3><p>Recibes avisos cuando evaluamos, atendemos y restablecemos el servicio.</p></div>
   </section>
 
-  <section class="card">
-    <h2>Consultar el estado de mi reporte</h2>
-    <div class="row">
-      <div><label for="code">Código del reporte</label><input id="code" placeholder="REP-LIM-SURCO-ABCDEFGHIJKLMNOP" class="mono"></div>
-      <div><label for="verify">Últimos 4 dígitos de tu celular</label><input id="verify" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></div>
-      <div style="align-self:end"><button id="lookup" class="sec">Consultar</button></div>
-    </div>
-    <div id="status"></div>
-  </section>
+  <div class="grid2">
+    <section class="card" id="reportar">
+      <h2>Reportar un problema</h2>
+      <p class="sub">Todos los campos son obligatorios salvo el correo.</p>
+      <form id="form" autocomplete="off">
+        <div class="row">
+          <div><label for="doc">Documento de identidad</label><input id="doc" required pattern="[A-Za-z0-9]{6,15}" maxlength="15"></div>
+          <div><label for="phone">Celular</label><input id="phone" required pattern="\+?[0-9]{7,15}" placeholder="+51999999999"></div>
+        </div>
+        <label for="email">Correo para recibir avisos</label><input id="email" type="email" maxlength="120" placeholder="tu@correo.com">
+        <div class="row">
+          <div><label for="zone">Zona</label><select id="zone" required></select></div>
+          <div><label for="category">Tipo de problema</label><select id="category" required></select></div>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button type="button" id="geo" class="ghost small">Usar mi ubicación</button><span id="geomsg" class="mut"></span>
+        </div>
+        <label for="when">¿Cuándo empezó?</label><input id="when" type="datetime-local" required>
+        <label for="desc">Descripción</label>
+        <textarea id="desc" required minlength="3" maxlength="1000" placeholder="Cuéntanos qué pasa (por ejemplo, si es cerca de un hospital o colegio)"></textarea>
+        <p class="hint">Tus datos personales solo se usan para avisarte del estado del servicio y no se comparten con otros sistemas.</p>
+        <div class="actions"><button id="send" type="submit" class="buy">Enviar reporte</button></div>
+        <div id="result"></div>
+      </form>
+    </section>
+
+    <section class="card soft" id="consultar">
+      <h2>Consultar mi reporte</h2>
+      <p class="sub">Usa el código que recibiste y los últimos 4 dígitos de tu celular.</p>
+      <label for="code">Código del reporte</label><input id="code" placeholder="REP-LIM-SURCO-ABCDEFGHIJKLMNOP" class="mono">
+      <label for="verify">Últimos 4 dígitos de tu celular</label><input id="verify" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="0000">
+      <div class="actions"><button id="lookup" class="sec">Consultar</button></div>
+      <div id="status"></div>
+    </section>
+  </div>
 </main>
+
+<footer><div class="in"><span>PulsoRed · Red TeleCorp</span><span>Azure · AWS · GCP</span></div></footer>
 <script type="module" src="/assets/portal.js"></script>
 </body>
 </html>
