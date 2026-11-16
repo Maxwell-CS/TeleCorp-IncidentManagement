@@ -6,9 +6,9 @@ from .ai import STAGE_TEXT
 QUEUE = "notifications"
 STAGE_LABEL = {"EVALUANDO": "Evaluando", "IDENTIFICADA": "Incidencia identificada", "RESTABLECIDO": "Servicio restablecido"}
 SUBJECTS = {
-    "EVALUANDO": "PulsoRed: estamos evaluando tu reporte",
-    "IDENTIFICADA": "PulsoRed: incidencia identificada",
-    "RESTABLECIDO": "PulsoRed: servicio restablecido",
+    "EVALUANDO": "TeleCorp: estamos evaluando tu reporte",
+    "IDENTIFICADA": "TeleCorp: incidencia identificada",
+    "RESTABLECIDO": "TeleCorp: servicio restablecido",
 }
 
 
@@ -44,7 +44,7 @@ def deliver(store, sender, msg):
     report = store.get("reports", msg["report_id"], domain.zone_of_report_id(msg["report_id"])) or {}
     channels = []
     if report.get("email"):
-        channels.append(sender.email(report["email"], SUBJECTS.get(msg["stage"], "PulsoRed"), msg["text"]))
+        channels.append(sender.email(report["email"], SUBJECTS.get(msg["stage"], "TeleCorp"), msg["text"]))
     if report.get("phone"):
         channels.append(sender.sms(report["phone"], msg["text"]))
     store.upsert("notifications", {
